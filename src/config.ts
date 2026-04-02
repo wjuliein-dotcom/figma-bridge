@@ -124,6 +124,10 @@ export const DEFAULT_VECTOR_HELL_CONFIG: VectorHellConfig = {
     'absoluteBoundingBox', 'layoutMode', 'fills', 'strokes',
     'effects', 'styles', 'componentProperties'
   ],
+  preserveGradientData: false,   // 默认不保留渐变数据，节省空间
+  preserveVectorPaths: false,    // 默认不保留路径信息
+  preserveVectorNetwork: false,   // 默认不保留网络信息
+  sizeToleranceRatio: 3,          // 长宽比小于3认为接近正方形
 };
 
 // 矢量节点要过滤的属性（这些属性会导致数据爆炸）
@@ -163,7 +167,7 @@ export const DEFAULT_FINGERPRINT_CONFIG: FingerprintConfig = {
     'menu-item', 'menuitem',
   ],
   similarityThreshold: 0.95, // 95% 相似度视为相同结构
-  maxUniqueStructures: 3,
+  maxUniqueStructures: 5,    // 增加到5个唯一结构
   // 始终保留的特殊节点名称匹配
   preservePatterns: [
     // 展开/收起
@@ -176,7 +180,12 @@ export const DEFAULT_FINGERPRINT_CONFIG: FingerprintConfig = {
     'loadmore', 'load-more', 'pagination', 'header', 'footer',
     // Table 特有
     'header-row', 'headerrow', 'summary', 'summary-row',
+    // 高亮/强调
+    'highlight', 'emphasized', 'important', 'primary', 'featured',
   ],
+  preserveDisabled: true,    // 默认保留禁用状态
+  preserveHighlighted: true,  // 默认保留高亮状态
+  maxSamplingRatio: 0.5,      // 最多采样50%的数据
 };
 
 // 图表相关的属性白名单

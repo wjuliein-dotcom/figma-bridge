@@ -32,7 +32,7 @@ if (!FILE_KEY) {
 // --- 步骤 2：初始化 Server ---
 const server = new McpServer({
     name: "figma-bridge",
-    version: "1.0.0",
+    version: "1.1.0",
 });
 
 // --- 步骤 3：定义工具，并调用转换函数 ---
@@ -40,25 +40,81 @@ server.tool(
     "get-figma-node",
     "获取Figma节点的结构化数据，用于生成Vue 3组件代码（Composition API + TypeScript）。支持图表识别，自动检测ECharts/G6图表并提取数据。",
     {
-        nodeId: z.string().describe("Figma节点的ID"),
-        filterNames: z.array(z.string()).optional().describe("要过滤掉的节点名称列表（大小写不敏感），默认会过滤Menu、Header、菜单等"),
-        useDefaultFilter: z.boolean().optional().default(true).describe("是否启用默认过滤（过滤Menu、Header等常见布局组件）"),
+        nodeId: z.string().describe("Figma节点的ID，支持 1-16253 或 1:16253 格式"),
         framework: z.enum(['vue', 'react', 'html']).optional().default('vue').describe("目标框架"),
+
+        // 布局过滤参数
         siderWidth: z.number().optional().default(220).describe("左侧菜单栏宽度阈值（默认220px），用于判断左侧菜单区域"),
         headerHeight: z.number().optional().default(64).describe("顶部头部高度阈值（默认64px），用于判断顶部header区域"),
+        siderWidthTolerance: z.number().optional().default(50).describe("侧边栏位置容差（默认50px），允许与siderWidth的偏差范围"),
+        headerHeightTolerance: z.number().optional().default(20).describe("头部位置容差（默认20px），允许与headerHeight的偏差范围"),
+        useDefaultFilter: z.boolean().optional().default(true).describe("是否启用默认过滤（过滤Menu、Header等常见布局组件）"),
+        filterNames: z.array(z.string()).optional().describe("额外要过滤掉的节点名称列表（大小写不敏感），配合默认过滤使用"),
+
+        // 深度限制
         maxDepth: z.number().optional().default(10).describe("最大递归深度（默认10层），防止深层嵌套导致数据量过大"),
-        enableFingerprintSampling: z.boolean().optional().default(false).describe("是否启用智能指纹采样（默认禁用），用于压缩Table、List等重复组件的数据量"),
+
+        // 矢量地狱优化
+        enableVectorHellOptimization: z.boolean().optional().default(true).describe("是否启用矢量地狱优化（默认启用），压缩图标/插画数据"),
+        vectorHellConfig: z.object({
+            minVectorChildren: z.number().optional().describe("判定为图标的最小VECTOR子节点数量（默认3）"),
+            maxIconSize: z.number().optional().describe("判定为图标的最大尺寸（默认200px）"),
+            maxNestingDepth: z.number().optional().describe("最大嵌套深度（默认3），超过则扁平化"),
+            preserveGradientData: z.boolean().optional().describe("是否保留渐变数据（默认false）"),
+            preserveVectorPaths: z.boolean().optional().describe("是否保留矢量路径信息（默认false）"),
+            preserveVectorNetwork: z.boolean().optional().describe("是否保留矢量网络信息（默认false）"),
+        }).optional().describe("矢量地狱优化配置选项"),
+
+        // 智能指纹采样
+        enableFingerprintSampling: z.boolean().optional().default(true).describe("是否启用智能指纹采样（默认启用），用于压缩Table、List等重复组件的数据量"),
         fingerprintConfig: z.object({
             similarityThreshold: z.number().optional().describe("指纹相似度阈值（0-1，默认0.95），高于此阈值视为相同结构"),
-            maxUniqueStructures: z.number().optional().describe("最大保留的唯一结构数（默认3）"),
+            maxUniqueStructures: z.number().optional().describe("最大保留的唯一结构数（默认5）"),
+            preserveDisabled: z.boolean().optional().describe("是否保留禁用状态的行（默认true）"),
+            preserveHighlighted: z.boolean().optional().describe("是否保留高亮/选中状态的行（默认true）"),
+            maxSamplingRatio: z.number().optional().describe("最大采样比例（默认0.5），最多采样50%的数据"),
         }).optional().describe("指纹采样配置选项"),
+
+        // 图表识别
         enableChartDetection: z.boolean().optional().default(true).describe("是否启用图表识别（默认启用），自动检测图表类型并提取数据用于ECharts/G6生成"),
         chartConfig: z.object({
             minDataPoints: z.number().optional().describe("最少数据点数量才视为图表（默认3）"),
             confidenceThreshold: z.number().optional().describe("图表识别置信度阈值（0-1，默认0.6）"),
         }).optional().describe("图表检测配置选项")
     },
-    async ({ nodeId, filterNames = [], useDefaultFilter = true, framework = 'vue', siderWidth = 220, headerHeight = 64, maxDepth = 10, enableFingerprintSampling = false, fingerprintConfig = {}, enableChartDetection = true, chartConfig = {} }: { nodeId: string, filterNames?: string[], useDefaultFilter?: boolean, framework?: 'vue' | 'react' | 'html', siderWidth?: number, headerHeight?: number, maxDepth?: number, enableFingerprintSampling?: boolean, fingerprintConfig?: any, enableChartDetection?: boolean, chartConfig?: any }) => {
+    async ({
+        nodeId,
+        framework = 'vue',
+        siderWidth = 220,
+        headerHeight = 64,
+        siderWidthTolerance,
+        headerHeightTolerance,
+        useDefaultFilter = true,
+        filterNames = [],
+        maxDepth = 10,
+        enableVectorHellOptimization = true,
+        vectorHellConfig = {},
+        enableFingerprintSampling = true,
+        fingerprintConfig = {},
+        enableChartDetection = true,
+        chartConfig = {}
+    }: {
+        nodeId: string,
+        framework?: 'vue' | 'react' | 'html',
+        siderWidth?: number,
+        headerHeight?: number,
+        siderWidthTolerance?: number,
+        headerHeightTolerance?: number,
+        useDefaultFilter?: boolean,
+        filterNames?: string[],
+        maxDepth?: number,
+        enableVectorHellOptimization?: boolean,
+        vectorHellConfig?: any,
+        enableFingerprintSampling?: boolean,
+        fingerprintConfig?: any,
+        enableChartDetection?: boolean,
+        chartConfig?: any
+    }) => {
         try {
             // 标准化节点ID：将连字符替换为冒号（Figma标准格式）
             const normalizedNodeId = nodeId.replace(/-/g, ':');
@@ -93,7 +149,11 @@ server.tool(
                 useDefaultFilter,
                 siderWidth,
                 headerHeight,
+                siderWidthTolerance,
+                headerHeightTolerance,
                 maxDepth,
+                enableVectorHellOptimization,
+                vectorHellConfig,
                 enableFingerprintSampling,
                 fingerprintConfig,
                 enableChartDetection,

@@ -11,7 +11,7 @@ src/
 ├── types.ts              # 类型定义
 ├── config.ts             # 默认配置（过滤名称、白名单、采样配置）
 ├── filter.ts             # 布局过滤逻辑（Menu、Header 区域识别）
-├── whitelist.ts          # 组件白名单系统
+├── whitelist.ts          # 组件白名单系统（支持宽松匹配）
 ├── vector-optimization.ts # 矢量地狱优化（图标/插画数据压缩）
 ├── fingerprint-sampling.ts # 智能指纹采样（Table/List 重复结构压缩）
 ├── chart-detection.ts    # 图表识别与数据提取（ECharts/G6）
@@ -72,6 +72,23 @@ FILE_KEY=your_figma_file_key
 | Menu/Sidebar | x≈0, width≈siderWidth | Dropdown/Select 中的 Menu 保留 |
 | Header/Navbar | y≈0, height≈headerHeight | Card/Modal 中的 Header 保留 |
 
+**配置参数**：
+```typescript
+{
+  siderWidth: number,              // 侧边栏宽度阈值，默认 220px
+  headerHeight: number,            // 头部高度阈值，默认 64px
+  siderWidthTolerance?: number,    // 侧边栏容差，默认 50px
+  headerHeightTolerance?: number,  // 头部容差，默认 20px
+  useDefaultFilter: boolean,       // 启用默认过滤，默认 true
+  filterNames: string[],           // 额外过滤名称
+}
+```
+
+**宽松匹配**：
+- 使用前缀匹配：`menu-item` 匹配 `menu`
+- 使用单词边界匹配：`/sidebar/menu` 中的 `menu` 被匹配
+- 避免误匹配：`menuitem` 不会误匹配 `menu`
+
 ### 2. 矢量地狱优化 (Vector Hell Optimization)
 
 检测包含多个 VECTOR 的 GROUP/FRAME，自动简化：
@@ -80,13 +97,53 @@ FILE_KEY=your_figma_file_key
 - 添加 `_isIcon` 标记供 AI 识别
 - **效果**: 数据量减少 90%+
 
+**图标判定**（多重条件）：
+1. VECTOR 子节点数量 ≥ minVectorChildren
+2. 名称包含图标关键词（icon、logo、emoji 等）
+3. 知名图标库命名（icon-、lucide-、feather- 等）
+4. 尺寸接近正方形（长宽比 < 3）
+
+**配置参数**：
+```typescript
+{
+  enableVectorHellOptimization: boolean, // 默认启用
+  vectorHellConfig: {
+    minVectorChildren: number,      // 最小 VECTOR 数量，默认 3
+    maxIconSize: number,             // 最大图标尺寸，默认 200px
+    maxNestingDepth: number,         // 最大嵌套深度，默认 3
+    preserveGradientData?: boolean,  // 保留渐变数据，默认 false
+    preserveVectorPaths?: boolean,   // 保留路径数量信息，默认 false
+    preserveVectorNetwork?: boolean, // 保留网络节点数，默认 false
+  }
+}
+```
+
 ### 3. 智能指纹采样 (Fingerprint Sampling)
 
 针对 Table、List 等重复组件：
-- 通过结构指纹识别相同行
+- 通过结构指纹识别相同行（不依赖名称，更稳定）
 - 保留所有不同结构的样本
-- 特殊状态（展开、选中）始终保留
-- **注意**: 当前默认禁用，如需压缩可手动启用
+- 特殊状态（展开、选中、禁用）始终保留
+- **默认启用**，可手动关闭
+
+**特殊状态识别**：
+- 命名模式：`expand`、`selected`、`active`、`disabled` 等
+- 变体属性：`componentProperties.selected.value`、`expanded.value` 等
+- 异常尺寸：高度 > 500px 的行（可能是汇总行）
+
+**配置参数**：
+```typescript
+{
+  enableFingerprintSampling: boolean, // 默认启用
+  fingerprintConfig: {
+    similarityThreshold: number,    // 相似度阈值，默认 0.95
+    maxUniqueStructures: number,    // 最大保留结构数，默认 5
+    preserveDisabled?: boolean,     // 保留禁用状态，默认 true
+    preserveHighlighted?: boolean,   // 保留高亮状态，默认 true
+    maxSamplingRatio?: number,      // 最大采样比例，默认 0.5
+  }
+}
+```
 
 ### 4. 图表识别与数据提取 (Chart Detection)
 
@@ -147,15 +204,19 @@ FILE_KEY=your_figma_file_key
 - 百分比：自动移除 `%` 符号
 - 千分位：自动移除 `,` 分隔符
 - 中文数字：一二三四五六七八九十
+- 范围值：支持 "100-200" 格式（取中间值）
 - 相对数值：从位置推断（百分比）
+- 组件属性：从 `componentProperties.value/number/data` 提取
 - 散点坐标：`[x, y]` 格式
 
 **多系列提取**：
 - 按颜色自动分组提取多个系列
+- 从名称推断系列名（如"系列1"、"产品A"）
 - 支持堆叠图、分组图数据
 
 **坐标轴识别**：
-- 基于位置区域分析（左侧15%、底部70%）
+- 基于位置区域分析（左侧12%、底部88%）
+- 从 `componentProperties.axisLabel` 提取
 - 区分 X 轴和 Y 轴标签
 - 排除纯数值作为标签
 
@@ -244,22 +305,58 @@ transform.ts
 ```typescript
 // 转换选项
 interface TransformOptions {
+  // 基本参数
   framework?: 'vue' | 'react' | 'html';
-  filterNames?: string[];           // 额外过滤名称
-  useDefaultFilter?: boolean;       // 启用默认过滤
-  siderWidth?: number;              // 左侧菜单宽度阈值
-  headerHeight?: number;            // 顶部头部高度阈值
-  maxDepth?: number;                // 最大递归深度
-  enableFingerprintSampling?: boolean;
+
+  // 布局过滤
+  filterNames?: string[];
+  useDefaultFilter?: boolean;
+  siderWidth?: number;
+  headerHeight?: number;
+  siderWidthTolerance?: number;   // 侧边栏容差，默认 50px
+  headerHeightTolerance?: number; // 头部容差，默认 20px
+
+  // 深度限制
+  maxDepth?: number;
+
+  // 矢量优化
   enableVectorHellOptimization?: boolean;
-  enableChartDetection?: boolean;   // 启用图表识别（默认启用）
-  chartConfig?: {                   // 图表配置
-    minDataPoints?: number;         // 最少数据点数
-    confidenceThreshold?: number;   // 置信度阈值
-  };
+  vectorHellConfig?: Partial<VectorHellConfig>;
+
+  // 指纹采样（默认启用）
+  enableFingerprintSampling?: boolean;
+  fingerprintConfig?: Partial<FingerprintConfig>;
+
+  // 图表识别
+  enableChartDetection?: boolean;
+  chartConfig?: Partial<ChartConfig>;
 }
 
-// 图表配置完整类型
+// 矢量优化配置
+interface VectorHellConfig {
+  enabled: boolean;
+  minVectorChildren: number;
+  maxIconSize: number;
+  maxNestingDepth: number;
+  preserveVectorProps: string[];
+  preserveGradientData?: boolean;
+  preserveVectorPaths?: boolean;
+  preserveVectorNetwork?: boolean;
+  sizeToleranceRatio?: number;
+}
+
+// 指纹采样配置
+interface FingerprintConfig {
+  namePatterns: string[];
+  similarityThreshold: number;
+  maxUniqueStructures: number;
+  preservePatterns: string[];
+  preserveDisabled?: boolean;
+  preserveHighlighted?: boolean;
+  maxSamplingRatio?: number;
+}
+
+// 图表配置
 interface ChartConfig {
   enabled: boolean;
   minDataPoints: number;
@@ -276,8 +373,9 @@ interface ChartConfig {
   name: string,
   type: string,
   component: string,
-  layout: 'flex-row' | 'flex-col' | 'absolute' | 'grid',
+  layout: 'flex-row' | 'flex-col' | 'flex-wrap' | 'grid' | 'absolute',
   props: Record<string, any>,
+  _layoutInfo?: { layoutMode, layoutAlign, primaryAxisAlignItems, ... },
   children: DSLNode[],
   // 图表节点特有字段
   _isChart?: boolean,
@@ -305,88 +403,156 @@ export const COMPONENT_COMPOSITION_WHITELIST = {
 };
 ```
 
-### 调整矢量优化参数
+### 调整布局过滤参数
 
-编辑 `src/config.ts`：
+编辑 `src/config.ts` 或通过 MCP 参数：
 
 ```typescript
-export const DEFAULT_VECTOR_HELL_CONFIG: VectorHellConfig = {
-  minVectorChildren: 3,   // 判定为图标的最小 VECTOR 数量
-  maxIconSize: 200,       // 最大图标尺寸
-  maxNestingDepth: 3,     // 最大嵌套深度
-};
+// 通过参数调整容差
+const result = await getFigmaNode({
+  nodeId: "1-12345",
+  siderWidth: 200,              // 自定义侧边栏宽度
+  siderWidthTolerance: 30,     // 较小容差
+  headerHeight: 80,            // 较高头部
+  headerHeightTolerance: 15,   // 较小容差
+});
+```
+
+### 调整矢量优化参数
+
+编辑 `src/config.ts` 或通过 MCP 参数：
+
+```typescript
+const result = await getFigmaNode({
+  nodeId: "1-12345",
+  enableVectorHellOptimization: true,
+  vectorHellConfig: {
+    minVectorChildren: 5,      // 更多 VECTOR 才视为图标
+    maxIconSize: 150,           // 更小的图标尺寸阈值
+    preserveGradientData: true, // 保留渐变数据
+    preserveVectorPaths: true,  // 保留路径数量信息
+  }
+});
 ```
 
 ### 调整指纹采样参数
 
-编辑 `src/config.ts`：
+编辑 `src/config.ts` 或通过 MCP 参数：
 
 ```typescript
-export const DEFAULT_FINGERPRINT_CONFIG: FingerprintConfig = {
-  namePatterns: ['row', 'item', 'option'],
-  similarityThreshold: 0.95,
-  maxUniqueStructures: 3,
-  preservePatterns: ['expand', 'selected'],
-};
+const result = await getFigmaNode({
+  nodeId: "1-12345",
+  enableFingerprintSampling: true,
+  fingerprintConfig: {
+    similarityThreshold: 0.9,   // 更严格的相似度
+    maxUniqueStructures: 10,   // 保留更多结构
+    preserveDisabled: true,    // 保留禁用状态
+    preserveHighlighted: true, // 保留高亮状态
+    maxSamplingRatio: 0.3,     // 最多采样30%
+  }
+});
 ```
 
 ### 调整图表识别参数
 
-编辑 `src/config.ts`：
+编辑 `src/config.ts` 或通过 MCP 参数：
 
 ```typescript
-export const DEFAULT_CHART_CONFIG: ChartConfig = {
-  enabled: true,
-  minDataPoints: 3,
-  confidenceThreshold: 0.6,
-  typeKeywords: {
-    bar: ['柱状图', 'bar', 'column', '统计图'],
-    line: ['折线图', 'line', 'trend', '走势'],
-    pie: ['饼图', 'pie', '环形图', '占比'],
-    scatter: ['散点图', 'scatter', '分布'],
-    area: ['面积图', 'area', '堆叠'],
-    radar: ['雷达图', 'radar', '蛛网'],
-    graph: ['关系图', 'graph', '网络'],
-    tree: ['树图', 'tree', '层级'],
-    sankey: ['桑基图', 'sankey'],
-    funnel: ['漏斗图', 'funnel', '转化率'],
-    gauge: ['仪表盘', 'gauge', '进度'],
-    heatmap: ['热力图', 'heatmap'],
-    candlestick: ['K线图', 'candlestick', '蜡烛图'],
-  },
-  axisDetection: {
-    minLineLength: 50,
-    axisLabelPatterns: ['\\d+', '年', '月', '日', 'Q[1-4]'],
-  },
-  dataExtraction: {
-    maxSeries: 10,
-    inferNumericValues: true,
-    extractFromPosition: true,
+const result = await getFigmaNode({
+  nodeId: "1-12345",
+  enableChartDetection: true,
+  chartConfig: {
+    minDataPoints: 5,           // 至少5个数据点
+    confidenceThreshold: 0.7   // 更高置信度阈值
   }
-};
+});
 ```
 
 ## 工具调用示例
 
 ```typescript
-// 获取 Figma 节点数据
+// 基础使用（所有优化默认启用）
 const result = await getFigmaNode({
   nodeId: "1-16253",  // 支持 1-16253 或 1:16253 格式
-  framework: "vue",
-  siderWidth: 220,
-  headerHeight: 64,
-  enableFingerprintSampling: false,  // 默认禁用
-  enableVectorHellOptimization: true   // 默认启用
+  framework: "vue"
 });
 
-// 图表识别示例
+// 自定义布局过滤
+const result = await getFigmaNode({
+  nodeId: "1-12345",
+  framework: "vue",
+  siderWidth: 200,
+  headerHeight: 60,
+  siderWidthTolerance: 30,
+  headerHeightTolerance: 15,
+  filterNames: ['extra-menu', 'banner'],  // 额外过滤
+  useDefaultFilter: true
+});
+
+// 指纹采样（默认启用）
+const result = await getFigmaNode({
+  nodeId: "1-12345",
+  framework: "vue",
+  enableFingerprintSampling: true,
+  fingerprintConfig: {
+    similarityThreshold: 0.95,
+    maxUniqueStructures: 5
+  }
+});
+
+// 图表识别
 const chartResult = await getFigmaNode({
   nodeId: "1-12345",
   framework: "vue",
-  enableChartDetection: true,        // 启用图表识别（默认启用）
+  enableChartDetection: true,
   chartConfig: {
-    minDataPoints: 3,                // 最少3个数据点
-    confidenceThreshold: 0.7         // 置信度阈值70%
+    minDataPoints: 3,
+    confidenceThreshold: 0.7
+  }
+});
+
+// 完整配置示例
+const fullResult = await getFigmaNode({
+  nodeId: "1-12345",
+  framework: "vue",
+
+  // 布局过滤
+  siderWidth: 220,
+  headerHeight: 64,
+  siderWidthTolerance: 50,
+  headerHeightTolerance: 20,
+  useDefaultFilter: true,
+  filterNames: [],
+
+  // 深度限制
+  maxDepth: 10,
+
+  // 矢量优化
+  enableVectorHellOptimization: true,
+  vectorHellConfig: {
+    minVectorChildren: 3,
+    maxIconSize: 200,
+    maxNestingDepth: 3,
+    preserveGradientData: false,
+    preserveVectorPaths: false,
+    preserveVectorNetwork: false
+  },
+
+  // 指纹采样（默认启用）
+  enableFingerprintSampling: true,
+  fingerprintConfig: {
+    similarityThreshold: 0.95,
+    maxUniqueStructures: 5,
+    preserveDisabled: true,
+    preserveHighlighted: true,
+    maxSamplingRatio: 0.5
+  },
+
+  // 图表识别（默认启用）
+  enableChartDetection: true,
+  chartConfig: {
+    minDataPoints: 3,
+    confidenceThreshold: 0.6
   }
 });
 ```
@@ -396,13 +562,22 @@ const chartResult = await getFigmaNode({
 1. **节点 ID 格式**: 支持 `1-16253` 或 `1:16253` 两种格式，会自动转换
 2. **编译要求**: 使用 `NodeNext` 模块系统，确保所有导入包含 `.js` 扩展名
 3. **深度限制**: `maxDepth` 防止深层嵌套导致数据爆炸，默认 10 层
-4. **数据量**: 矢量优化默认启用；指纹采样默认禁用；图表识别默认启用
-5. **图表识别**:
+4. **数据量**:
+   - 矢量优化：默认启用
+   - 指纹采样：默认启用（之前是默认禁用）
+   - 图表识别：默认启用
+5. **布局类型**: 支持 `flex-row`、`flex-col`、`flex-wrap`、`grid`、`absolute`
+6. **图表识别**:
    - 图表节点标记为 `type: "CHART"`，包含 `chartMeta`、`chartData`、`chartStyle`
    - 支持 ECharts 和 G6 的数据格式
    - 置信度低于阈值时作为普通容器处理
    - 名称匹配后会进行视觉特征验证
    - 多系列图表按颜色自动分组提取
+
+## 版本信息
+
+- **当前版本**: 1.1.0
+- **更新内容**: 漏洞修复与功能增强，包括布局过滤容差、矢量优化配置、指纹采样默认启用、图表识别增强
 
 ## 相关文档
 

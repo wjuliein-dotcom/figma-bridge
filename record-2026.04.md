@@ -584,12 +584,402 @@ data: number[] | Array<{ name: string; value: number }> | Array<{ name: string; 
 
 ---
 
+## 修改三：漏洞修复与功能增强（2026-04-02）
+
+### 目标
+识别并修复各核心功能中会导致生成代码与原设计产生出入的漏洞，同时增强功能灵活性。
+
+### 背景
+通过代码分析，发现以下核心功能存在潜在漏洞：
+1. 布局过滤策略：硬编码阈值、名称匹配过于宽泛
+2. 矢量地狱优化：图标判定简单、删除路径数据无法还原
+3. 智能指纹采样：默认禁用、相似度算法不准确
+4. 图表识别：数值提取有限、坐标轴识别硬编码
+5. 节点处理：layout判断简单、深度截断信息不足
+
+### 解决方案
+
+#### 1. 布局过滤策略优化
+
+**问题**：
+- 硬编码阈值 `siderWidth=220px`、`headerHeight=64px` 无法适配不同设计
+- 使用 `includes()` 匹配导致 "menuitem" 误匹配 "menu"
+- 白名单匹配依赖精确名称
+
+**解决方案**：
+
+新增宽松匹配函数 `looseMatches()`：
+```typescript
+function looseMatches(name: string, keyword: string): boolean {
+  const lowerName = name.toLowerCase();
+  const lowerKeyword = keyword.toLowerCase();
+
+  if (lowerName === lowerKeyword) return true;
+
+  // 支持前缀匹配：menu-item 匹配 menu
+  const pattern = new RegExp(`^${lowerKeyword}([-_/\\s]|$)`, 'i');
+  if (pattern.test(lowerName)) return true;
+
+  // 支持单词边界匹配
+  const includePattern = new RegExp(`[-_/\\s]${lowerKeyword}([-_/\\s]|$)`, 'i');
+  if (includePattern.test(lowerName)) return true;
+
+  return false;
+}
+```
+
+新增容差配置接口：
+```typescript
+export interface FilterContext {
+  siderWidth: number;
+  headerHeight: number;
+  siderWidthTolerance?: number;   // 新增：侧边栏容差
+  headerHeightTolerance?: number; // 新增：头部容差
+  filterNames: string[];
+  useDefaultFilter: boolean;
+}
+```
+
+白名单匹配改进：
+```typescript
+function looseMatch(name: string, keyword: string): boolean {
+  // 与上述 looseMatches 类似
+  // 支持前缀、单词边界匹配
+}
+```
+
+#### 2. 矢量地狱优化增强
+
+**问题**：
+- 图标判定条件简单，只看 VECTOR 子节点数量
+- 完全删除路径数据，无法还原真实矢量
+- 尺寸阈值固定
+
+**解决方案**：
+
+多重判定条件识别图标：
+```typescript
+export function isIconContainer(node: any, config: VectorHellConfig): boolean {
+  // 1. VECTOR 子节点数量
+  const vectorCount = node.children.filter((c: any) => c.type === 'VECTOR').length;
+
+  // 2. 检查名称是否包含图标关键词
+  const hasIconName = ['icon', '图标', 'ico', 'symbol', 'logo'].some(k => nameLower.includes(k));
+
+  // 3. 知名图标组件库命名
+  const isIconLib = [/^icon-/, /^i-/, /^lucide-/, /^feather-/].some(p => p.test(nameLower));
+
+  // 4. 尺寸比例（图标通常接近正方形）
+  const isSquareRatio = ratio < 3;
+
+  // 综合判定
+  return meetsVectorThreshold && (hasIconName || isIconLib || isSquareRatio);
+}
+```
+
+新增配置选项：
+```typescript
+export interface VectorHellConfig {
+  // 原有字段...
+  preserveGradientData?: boolean;   // 保留渐变数据
+  preserveVectorPaths?: boolean;   // 保留路径数量信息
+  preserveVectorNetwork?: boolean; // 保留网络节点数信息
+  sizeToleranceRatio?: number;     // 尺寸容差比例
+}
+```
+
+简化函数支持配置：
+```typescript
+function simplifyFillsOrStrokes(items: any[], config: VectorHellConfig): any[] {
+  if (!config.preserveGradientData) {
+    // 渐变数据占位符化
+    simplified.gradientStops = '[GradientStops]';
+  }
+  // ...
+}
+```
+
+#### 3. 智能指纹采样优化
+
+**问题**：
+- 默认禁用，数据量仍然爆炸
+- 指纹算法依赖名称，名称变化导致失效
+- 相似度判断简单，不同颜色行被误判相同
+
+**解决方案**：
+
+改进指纹算法（减少对名称的依赖）：
+```typescript
+export function calculateFingerprint(node: any, depth: number = 0): NodeFingerprint {
+  // 1. 收集子节点类型序列（不包含名称）
+  const childTypes = node.children
+    ? node.children.map((c: any) => c.type).join('|')
+    : '';
+
+  // 2. 收集布局属性（用于区分不同布局模式）
+  const layoutProps = [
+    node.layoutMode,
+    node.primaryAxisSizingMode,
+    node.counterAxisSizingMode,
+    node.itemSpacing,
+  ].filter(v => v !== undefined).join(':');
+
+  // 3. 生成结构哈希（不包含名称）
+  const structureHash = `${node.type}:${node.layoutMode}:${node.children?.length}:${childTypes}`;
+}
+```
+
+改进相似度算法：
+```typescript
+export function compareFingerprints(fp1: NodeFingerprint, fp2: NodeFingerprint): number {
+  // 子节点数量差异小于20%，给予部分相似度
+  const ratio = Math.min(fp1.childCount, fp2.childCount) / Math.max(fp1.childCount, fp2.childCount);
+  if (ratio > 0.8) return 0.7;
+
+  // 属性签名 Jaccard 相似度
+  const keys1 = fp1.propSignature.split(',');
+  const keys2 = fp2.propSignature.split(',');
+  const intersection = keys1.filter(k => keys2.includes(k));
+  const jaccard = intersection.length / [...new Set([...keys1, ...keys2])].length;
+
+  if (jaccard > 0.7) return 0.9;
+  // ...
+}
+```
+
+增强特殊状态识别：
+```typescript
+export function shouldPreserveNode(node: any, preservePatterns: string[], config: FingerprintConfig): boolean {
+  // 1. 先检查命名模式
+  if (nodeName.includes(pattern)) return true;
+
+  // 2. 检查变体属性
+  if (node.componentProperties?.selected?.value === true ||
+      node.componentProperties?.checked?.value === true ||
+      node.componentProperties?.expanded?.value === true) {
+    return true;
+  }
+
+  // 3. 检查禁用状态
+  if (props.disabled?.value === true) {
+    return config.preserveDisabled ?? true;
+  }
+
+  // 4. 检查节点尺寸（异常大的行可能是汇总行）
+  if (height > 500) return true;
+
+  return false;
+}
+```
+
+新增配置选项：
+```typescript
+export interface FingerprintConfig {
+  // 原有字段...
+  preserveDisabled?: boolean;      // 保留禁用状态
+  preserveHighlighted?: boolean;    // 保留高亮状态
+  maxSamplingRatio?: number;       // 最大采样比例
+}
+```
+
+**关键变更**：默认启用指纹采样，取消注释采样代码。
+
+#### 4. 图表识别增强
+
+**问题**：
+- 不支持范围值（如 "100-200"）
+- 坐标轴识别硬编码
+- 数据提取来源单一
+
+**解决方案**：
+
+支持范围值提取：
+```typescript
+function extractNumericValue(node: any): number | null {
+  // 支持范围值（如 "100-200"），取中间值
+  const rangeMatch = cleanedText.match(/^(-?\d+\.?\d*)\s*[-~至到]\s*(-?\d+\.?\d*)$/);
+  if (rangeMatch) {
+    const start = parseFloat(rangeMatch[1]);
+    const end = parseFloat(rangeMatch[2]);
+    return (start + end) / 2;
+  }
+  // ...
+}
+```
+
+改进坐标轴检测：
+```typescript
+// 更灵活的坐标轴区域识别
+const leftZone = nodeBounds.x + nodeBounds.width * 0.12;  // 从 0.15 调整为 0.12
+const bottomZone = nodeBounds.y + nodeBounds.height * 0.88; // 从 0.85 调整为 0.88
+
+// 从 componentProperties 提取轴名称
+if (child.componentProperties?.axisLabel || child.componentProperties?.xLabel) {
+  xAxisLabels.push(labelValue);
+}
+```
+
+改进数据提取：
+```typescript
+// 从 componentProperties 提取数值
+let value = child.componentProperties?.value?.value ??
+            child.componentProperties?.number?.value ??
+            child.componentProperties?.data?.value;
+```
+
+改进位置推断（考虑 Y 轴方向）：
+```typescript
+// 柱状图：高度相对于容器高度，注意 Y 轴向下
+const heightFromBottom = containerBottom - itemBottom;
+normalizedValue = Math.round((heightFromBottom / nodeBounds.height) * 100);
+```
+
+#### 5. 节点处理优化
+
+**问题**：
+- layout 判断简单，非 HORIZONTAL 即为 flex-col
+- 深度截断信息不足
+
+**解决方案**：
+
+改进布局判断：
+```typescript
+function createBaseResult(node: any): any {
+  let layout: string;
+
+  if (node.layoutMode === 'HORIZONTAL') {
+    layout = 'flex-row';
+  } else if (node.layoutMode === 'VERTICAL') {
+    layout = 'flex-col';
+  } else if (node.layoutWrap && node.layoutWrap !== 'NO_WRAP') {
+    layout = 'flex-wrap';
+  } else if (node.primaryAxisAlignItems || node.counterAxisAlignItems) {
+    layout = 'flex-col';
+  } else if (node.layoutAlign) {
+    layout = 'grid';
+  } else if (node.absoluteBoundingBox) {
+    layout = 'absolute';
+  } else {
+    layout = 'flex-col';
+  }
+
+  // 保留布局相关信息
+  _layoutInfo: {
+    layoutMode: node.layoutMode,
+    layoutAlign: node.layoutAlign,
+    primaryAxisAlignItems: node.primaryAxisAlignItems,
+    // ...
+  }
+}
+```
+
+改进深度截断：
+```typescript
+function createTruncatedResult(node: any, maxDepth: number, currentDepth: number): any {
+  return {
+    _truncated: true,
+    reason: 'max-depth-reached',
+    _depth: currentDepth,
+    _maxDepth: maxDepth,
+    _note: `已达到最大深度限制(${maxDepth}层)，${currentDepth - maxDepth}层子节点已截断`,
+    children: [],
+  };
+}
+```
+
+#### 6. MCP 工具参数更新
+
+**新增参数**：
+```typescript
+{
+  // 布局过滤
+  siderWidthTolerance: z.number().optional().default(50),
+  headerHeightTolerance: z.number().optional().default(20),
+
+  // 矢量地狱优化
+  enableVectorHellOptimization: z.boolean().optional().default(true),
+  vectorHellConfig: z.object({
+    minVectorChildren: z.number().optional(),
+    maxIconSize: z.number().optional(),
+    maxNestingDepth: z.number().optional(),
+    preserveGradientData: z.boolean().optional(),
+    preserveVectorPaths: z.boolean().optional(),
+    preserveVectorNetwork: z.boolean().optional(),
+  }).optional(),
+
+  // 指纹采样
+  fingerprintConfig: z.object({
+    preserveDisabled: z.boolean().optional(),
+    preserveHighlighted: z.boolean().optional(),
+    maxSamplingRatio: z.number().optional(),
+  }).optional(),
+}
+```
+
+**参数顺序调整**：
+```typescript
+{
+  // 1. 基本参数
+  nodeId, framework,
+
+  // 2. 布局过滤（相关参数放一起）
+  siderWidth, headerHeight, siderWidthTolerance, headerHeightTolerance,
+  useDefaultFilter, filterNames,
+
+  // 3. 深度限制
+  maxDepth,
+
+  // 4. 矢量地狱优化
+  enableVectorHellOptimization, vectorHellConfig,
+
+  // 5. 智能指纹采样
+  enableFingerprintSampling, fingerprintConfig,
+
+  // 6. 图表识别
+  enableChartDetection, chartConfig
+}
+```
+
+### 影响文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| `src/filter.ts` | 新增宽松匹配、容差配置支持 |
+| `src/whitelist.ts` | 改进白名单匹配逻辑 |
+| `src/vector-optimization.ts` | 多重判定图标、新增配置选项 |
+| `src/fingerprint-sampling.ts` | 改进指纹算法、特殊状态识别 |
+| `src/node-processor.ts` | 启用采样代码、改进布局判断和截断信息 |
+| `src/chart-detection.ts` | 范围值提取、改进坐标轴和数据提取 |
+| `src/types.ts` | 新增 VectorHellConfig 和 FingerprintConfig 字段 |
+| `src/config.ts` | 更新默认配置 |
+| `src/transform.ts` | 支持新配置选项 |
+| `src/index.ts` | 参数更新、顺序调整、版本号升级到 1.1.0 |
+
+### 优化效果
+
+| 功能 | 优化前 | 优化后 |
+|------|--------|--------|
+| 布局过滤 | 硬编码阈值 ±50px/±20px | 可配置容差参数 |
+| 名称匹配 | includes() 误匹配 | 宽松匹配支持前缀/边界 |
+| 图标判定 | 仅看 VECTOR 数量 | 多重条件：名称+尺寸+比例 |
+| 矢量优化 | 完全删除路径数据 | 可配置保留数量信息 |
+| 指纹采样 | 默认禁用 | 默认启用（之前是 false） |
+| 指纹算法 | 依赖名称，不稳定 | 不依赖名称，更稳定 |
+| 相似度判断 | 简单相等判断 | Jaccard 相似度 + 容差 |
+| 数值提取 | 单一文本提取 | 范围值 + componentProperties |
+| 坐标轴识别 | 硬编码 15%/70% | 可配置 + 支持属性提取 |
+| 布局判断 | 简单二选一 | 支持 grid/flex-wrap/absolute |
+| 深度截断 | 仅标记截断 | 包含深度信息和截断说明 |
+
+---
+
 ## 修改汇总表
 
 | 时间 | 类型 | 主要内容 | 影响文件 |
 |------|------|----------|----------|
-| 2026-04-01 | 功能新增 | 图表识别与数据提取功能，支持13种图表类型，提取数据供ECharts/G6使用 | `src/chart-detection.ts`(新增), `src/types.ts`, `src/config.ts`, `src/node-processor.ts`, `src/transform.ts`, `src/meta-builder.ts`, `src/index.ts`, `CLAUDE.md` |
-| 2026-04-02 | 功能优化 | 图表识别模块优化：决策树重构、名称验证、数据提取增强、坐标轴优化、排除模式扩展 | `src/chart-detection.ts`, `src/types.ts` |
+| 2026-04-01 | 功能新增 | 图表识别与数据提取功能，支持13种图表类型 | `src/chart-detection.ts`(新增), `src/types.ts`, `src/config.ts`, `src/node-processor.ts`, `src/transform.ts`, `src/meta-builder.ts`, `src/index.ts`, `CLAUDE.md` |
+| 2026-04-02 | 功能优化 | 图表识别模块优化：决策树重构、名称验证、数据提取增强 | `src/chart-detection.ts`, `src/types.ts` |
+| 2026-04-02 | 漏洞修复 | 布局过滤、矢量优化、指纹采样、图表识别、节点处理全面优化 | `src/filter.ts`, `src/whitelist.ts`, `src/vector-optimization.ts`, `src/fingerprint-sampling.ts`, `src/node-processor.ts`, `src/chart-detection.ts`, `src/types.ts`, `src/config.ts`, `src/transform.ts`, `src/index.ts` |
 
 ---
 

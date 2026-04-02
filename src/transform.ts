@@ -22,8 +22,10 @@ export function transformToDSL(node: any, options: TransformOptions = {}) {
     useDefaultFilter = true,
     siderWidth = 220,
     headerHeight = 64,
+    siderWidthTolerance,
+    headerHeightTolerance,
     maxDepth = 10,
-    enableFingerprintSampling = false,
+    enableFingerprintSampling = true,  // 默认启用指纹采样
     fingerprintConfig: userFingerprintConfig = {},
     enableVectorHellOptimization = true,
     vectorHellConfig: userVectorHellConfig = {},
@@ -41,12 +43,14 @@ export function transformToDSL(node: any, options: TransformOptions = {}) {
   // 获取过滤列表
   const namesToFilter = getFilterNames(useDefaultFilter, filterNames);
 
-  // 构建上下文
+  // 构建上下文（支持容差配置）
   const filterCtx: FilterContext = {
     siderWidth,
     headerHeight,
     filterNames: namesToFilter,
     useDefaultFilter,
+    siderWidthTolerance,
+    headerHeightTolerance,
   };
 
   const deps = {

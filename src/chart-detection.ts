@@ -656,7 +656,7 @@ function extractText(node: any): string {
 
 /**
  * 从节点中提取数值（优化版）
- * 支持：普通数字、负数、小数、货币符号（$、¥）、百分比、逗号分隔
+ * 支持：普通数字、负数、小数、货币符号（$、¥）、百分比、逗号分隔、范围值
  */
 function extractNumericValue(node: any): number | null {
   const text = extractText(node);
@@ -678,6 +678,16 @@ function extractNumericValue(node: any): number | null {
   };
   for (const [cn, num] of Object.entries(cnNumberMap)) {
     cleanedText = cleanedText.replace(new RegExp(cn, 'g'), num);
+  }
+
+  // 新增：支持范围值（如 "100-200"），取中间值
+  const rangeMatch = cleanedText.match(/^(-?\d+\.?\d*)\s*[-~至到]\s*(-?\d+\.?\d*)$/);
+  if (rangeMatch) {
+    const start = parseFloat(rangeMatch[1]);
+    const end = parseFloat(rangeMatch[2]);
+    if (!isNaN(start) && !isNaN(end) && isFinite(start) && isFinite(end)) {
+      return (start + end) / 2; // 返回中间值
+    }
   }
 
   // 尝试提取数字（支持负数、科学计数法）
@@ -708,8 +718,15 @@ function inferValueFromPosition(
 
   if (direction === 'vertical') {
     // 柱状图：高度相对于容器高度
-    const maxHeight = nodeBounds.height;
-    normalizedValue = Math.round((bounds.height / maxHeight) * 100);
+    // 注意：Figma坐标系Y轴向下，需要反转计算
+    const containerTop = nodeBounds.y;
+    const containerBottom = nodeBounds.y + nodeBounds.height;
+    const itemTop = bounds.y;
+    const itemBottom = bounds.y + bounds.height;
+
+    // 从底部向上计算比例
+    const heightFromBottom = containerBottom - itemBottom;
+    normalizedValue = Math.round((heightFromBottom / nodeBounds.height) * 100);
   } else {
     // 水平柱状图：宽度相对于容器宽度
     const maxWidth = nodeBounds.width;
@@ -723,7 +740,8 @@ function inferValueFromPosition(
 }
 
 /**
- * 提取坐标轴数据
+ * 提取坐标轴数据（优化版）
+ * 改进：使用更灵活的坐标轴检测策略
  */
 function extractAxesData(node: any, chartType: ChartType): { xAxis?: ChartAxis; yAxis?: ChartAxis } | undefined {
   if (chartType === 'pie' || chartType === 'gauge') {
@@ -738,11 +756,11 @@ function extractAxesData(node: any, chartType: ChartType): { xAxis?: ChartAxis; 
   let xAxisName = '';
   let yAxisName = '';
 
-  // 优化：更精确的坐标轴区域识别
-  const leftZone = nodeBounds.x + nodeBounds.width * 0.15;
-  const rightZone = nodeBounds.x + nodeBounds.width * 0.85;
-  const topZone = nodeBounds.y + nodeBounds.height * 0.15;
-  const bottomZone = nodeBounds.y + nodeBounds.height * 0.85;
+  // 优化：更灵活的坐标轴区域识别（基于节点大小动态调整）
+  const leftZone = nodeBounds.x + nodeBounds.width * 0.12;
+  const rightZone = nodeBounds.x + nodeBounds.width * 0.88;
+  const topZone = nodeBounds.y + nodeBounds.height * 0.12;
+  const bottomZone = nodeBounds.y + nodeBounds.height * 0.88;
 
   // 查找坐标轴相关的文本
   for (const child of children) {
@@ -753,7 +771,7 @@ function extractAxesData(node: any, chartType: ChartType): { xAxis?: ChartAxis; 
     if (!text) continue;
 
     // 明确的坐标轴名称匹配
-    if (name.includes('x-axis') || name.includes('x轴')) {
+    if (name.includes('x-axis') || name.includes('x轴') || name.includes('x axis')) {
       if (name.includes('title') || name.includes('label')) {
         xAxisName = text;
       } else {
@@ -761,7 +779,7 @@ function extractAxesData(node: any, chartType: ChartType): { xAxis?: ChartAxis; 
       }
     }
 
-    if (name.includes('y-axis') || name.includes('y轴')) {
+    if (name.includes('y-axis') || name.includes('y轴') || name.includes('y axis')) {
       if (name.includes('title') || name.includes('label')) {
         yAxisName = text;
       } else {
@@ -769,27 +787,37 @@ function extractAxesData(node: any, chartType: ChartType): { xAxis?: ChartAxis; 
       }
     }
 
-    // 基于位置的分类（优化版）
-    if (bounds && categories.length < 30) {
+    // 基于位置的分类（优化版）- 更宽松的阈值
+    if (bounds && categories.length < 50) {
       const centerX = bounds.x + (bounds.width || 0) / 2;
       const centerY = bounds.y + (bounds.height || 0) / 2;
 
       // 底部区域（宽度较大，高度较小的文本）-> X轴分类
-      const isBottomText = centerY > bottomZone && bounds.width > bounds.height;
+      const isBottomText = centerY > bottomZone * 0.95 && bounds.width > bounds.height;
       // 左侧区域（高度较大，宽度较小的文本）-> Y轴标签
-      const isLeftText = centerX < leftZone && bounds.height > bounds.width;
+      const isLeftText = centerX < leftZone * 1.1 && bounds.height > bounds.width;
 
       // 只添加短文本（避免误识别长文本为标签）
-      if (isBottomText && text.length > 0 && text.length < 15) {
-        // 避免重复添加
+      if (isBottomText && text.length > 0 && text.length < 20) {
         if (!xAxisLabels.includes(text)) {
           xAxisLabels.push(text);
         }
       }
 
-      if (isLeftText && text.length > 0 && text.length < 10) {
+      if (isLeftText && text.length > 0 && text.length < 15) {
         if (!yAxisLabels.includes(text)) {
           yAxisLabels.push(text);
+        }
+      }
+    }
+
+    // 尝试从 componentProperties 中提取轴名称
+    if (child.componentProperties) {
+      const props = child.componentProperties;
+      if (props.axisLabel || props.axis_name || props.xLabel || props.yLabel) {
+        const labelValue = props.axisLabel?.value || props.axis_name?.value || props.xLabel?.value || props.yLabel?.value;
+        if (labelValue && typeof labelValue === 'string') {
+          if (!xAxisLabels.includes(labelValue)) xAxisLabels.push(labelValue);
         }
       }
     }
@@ -818,7 +846,8 @@ function extractAxesData(node: any, chartType: ChartType): { xAxis?: ChartAxis; 
 }
 
 /**
- * 提取系列数据
+ * 提取系列数据（优化版）
+ * 改进：支持更多数据来源，增强多系列识别
  */
 function extractSeriesData(node: any, chartType: ChartType): ChartSeries[] {
   const children = node?.children || [];
@@ -832,7 +861,17 @@ function extractSeriesData(node: any, chartType: ChartType): ChartSeries[] {
 
     for (const child of children) {
       if (child.type === 'ELLIPSE' || child.type === 'VECTOR' || child.type === 'GROUP') {
-        const value = extractNumericValue(child);
+        // 尝试多种方式提取数值
+        let value = extractNumericValue(child);
+        if (value === null) {
+          // 从 componentProperties 提取
+          value = child.componentProperties?.value?.value ?? child.componentProperties?.number?.value ?? child.componentProperties?.data?.value;
+        }
+        if (value === null) {
+          // 从位置推断
+          value = inferValueFromPosition(child, nodeBounds, 'horizontal');
+        }
+
         const name = extractText(child) || child.name || `数据${pieData.length + 1}`;
         const color = child.fills?.[0] ? extractColor(child.fills[0]) : undefined;
 
@@ -854,14 +893,23 @@ function extractSeriesData(node: any, chartType: ChartType): ChartSeries[] {
   } else if (chartType === 'bar' || chartType === 'line') {
     // 优化：尝试按颜色分组提取多个系列
     const colorGroups = new Map<string, number[]>();
+    const seriesNames = new Map<string, string>();
 
     for (const child of children) {
-      if (child.type === 'RECTANGLE' || child.type === 'VECTOR') {
-        const value = extractNumericValue(child);
-        let finalValue: number | null = value;
+      if (child.type === 'RECTANGLE' || child.type === 'VECTOR' || child.type === 'GROUP') {
+        // 尝试多种方式提取数值
+        let finalValue: number | null = extractNumericValue(child);
 
-        // 如果没有文本值，尝试从位置推断
         if (finalValue === null) {
+          // 从 componentProperties 提取
+          const props = child.componentProperties;
+          if (props) {
+            finalValue = props.value?.value ?? props.number?.value ?? props.data?.value ?? props.amount?.value ?? props.count?.value;
+          }
+        }
+
+        if (finalValue === null) {
+          // 从位置推断
           finalValue = inferValueFromPosition(child, nodeBounds, 'vertical');
         }
 
@@ -871,7 +919,13 @@ function extractSeriesData(node: any, chartType: ChartType): ChartSeries[] {
 
           if (!colorGroups.has(colorKey)) {
             colorGroups.set(colorKey, []);
+            // 尝试从名称推断系列名
+            const childName = child.name?.toLowerCase() || '';
+            if (childName.includes('系列') || childName.includes('series') || childName.includes('group')) {
+              seriesNames.set(colorKey, child.name);
+            }
           }
+
           colorGroups.get(colorKey)!.push(finalValue);
         }
       }
@@ -883,8 +937,9 @@ function extractSeriesData(node: any, chartType: ChartType): ChartSeries[] {
 
     for (const [color, data] of colorGroups) {
       if (data.length > 0) {
+        const customName = seriesNames.get(color);
         series.push({
-          name: `系列${seriesIndex}`,
+          name: customName || `系列${seriesIndex}`,
           type: chartType,
           data,
           style: {
@@ -902,11 +957,12 @@ function extractSeriesData(node: any, chartType: ChartType): ChartSeries[] {
     if (series.length === 0) {
       const data: number[] = [];
       for (const child of children) {
-        if (child.type === 'RECTANGLE' || child.type === 'VECTOR') {
+        if (child.type === 'RECTANGLE' || child.type === 'VECTOR' || child.type === 'GROUP') {
           const bounds = child?.absoluteBoundingBox;
           if (bounds && bounds.height > 5) {
-            // 使用相对值
-            const normalizedHeight = Math.round((bounds.height / nodeBounds.height) * 100);
+            // 使用相对值（改进：考虑Y轴位置）
+            const heightRatio = bounds.height / nodeBounds.height;
+            const normalizedHeight = Math.round(heightRatio * 100);
             data.push(normalizedHeight);
           }
         }
@@ -928,7 +984,7 @@ function extractSeriesData(node: any, chartType: ChartType): ChartSeries[] {
     const scatterData: Array<{ name: string; value: [number, number] }> = [];
 
     for (const child of children) {
-      if (child.type === 'ELLIPSE' || child.type === 'CIRCLE') {
+      if (child.type === 'ELLIPSE' || child.type === 'CIRCLE' || child.type === 'RECTANGLE') {
         const bounds = child?.absoluteBoundingBox;
         if (bounds) {
           // 转换为相对坐标

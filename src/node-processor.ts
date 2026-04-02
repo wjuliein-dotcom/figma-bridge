@@ -35,29 +35,70 @@ export interface ProcessorDependencies {
 }
 
 /**
- * 创建基础结果对象
+ * 创建基础结果对象（改进：支持更多布局类型）
  */
 function createBaseResult(node: any): any {
+  // 优化：更准确的布局类型判断
+  let layout: string;
+
+  if (node.layoutMode === 'HORIZONTAL') {
+    layout = 'flex-row';
+  } else if (node.layoutMode === 'VERTICAL') {
+    layout = 'flex-col';
+  } else if (node.layoutAlign) {
+    // 有 layoutAlign 但没有 layoutMode，可能是 grid 或 absolute
+    if (node.layoutWrap && node.layoutWrap !== 'NO_WRAP') {
+      layout = 'flex-wrap'; // 弹性换行
+    } else if (node.primaryAxisAlignItems || node.counterAxisAlignItems) {
+      layout = 'flex-col'; // 弹性布局（无固定方向）
+    } else {
+      layout = 'grid'; // 网格布局
+    }
+  } else if (node.absoluteBoundingBox) {
+    // 有绝对定位边界，可能是绝对定位
+    layout = 'absolute';
+  } else {
+    layout = 'flex-col'; // 默认纵向
+  }
+
   return {
     id: node.id,
     name: node.name,
     type: node.type,
     component: node.name,
-    layout: node.layoutMode === 'HORIZONTAL' ? 'flex-row' : 'flex-col',
+    layout,
     props: node.componentProperties || {},
+    // 新增：保留布局相关信息
+    _layoutInfo: {
+      layoutMode: node.layoutMode,
+      layoutAlign: node.layoutAlign,
+      layoutGrow: node.layoutGrow,
+      layoutShrink: node.layoutShrink,
+      primaryAxisAlignItems: node.primaryAxisAlignItems,
+      counterAxisAlignItems: node.counterAxisAlignItems,
+      itemSpacing: node.itemSpacing,
+      paddingTop: node.paddingTop,
+      paddingBottom: node.paddingBottom,
+      paddingLeft: node.paddingLeft,
+      paddingRight: node.paddingRight,
+    },
   };
 }
 
 /**
- * 创建深度超限的截断结果
+ * 创建深度超限的截断结果（改进：包含更多信息）
  */
-function createTruncatedResult(node: any): any {
+function createTruncatedResult(node: any, maxDepth: number, currentDepth: number): any {
   return {
     id: node.id,
     name: node.name,
     type: node.type,
     _truncated: true,
     reason: 'max-depth-reached',
+    _depth: currentDepth,
+    _maxDepth: maxDepth,
+    _note: `已达到最大深度限制(${maxDepth}层)，${currentDepth - maxDepth}层子节点已截断`,
+    children: [], // 截断时清空子节点
   };
 }
 
@@ -185,7 +226,7 @@ function shouldSkipChartChildren(node: any, chartType: string): boolean {
 }
 
 /**
- * 处理子节点（指纹采样已禁用）
+ * 处理子节点（支持指纹采样）
  */
 function processChildren(
   node: any,
@@ -200,11 +241,8 @@ function processChildren(
     return;
   }
 
-  // 指纹采样功能已禁用（2026-03-31）
-  // 如需重新启用，取消注释以下代码块：
-  /*
   // 检查是否启用指纹采样
-  if (isFingerprintSamplingTarget(node.name || '', fingerprintConfig, enableFingerprintSampling) && node.children.length > 1) {
+  if (enableFingerprintSampling && isFingerprintSamplingTarget(node.name || '', fingerprintConfig) && node.children.length > 1) {
     // 智能指纹采样
     const { preserved, record } = fingerprintSampling(node.children, fingerprintConfig);
 
@@ -214,6 +252,8 @@ function processChildren(
       path: [...context.path, node.name || ''],
       isInsideIcon: context.isInsideIcon,
       iconNestingDepth: context.iconNestingDepth,
+      isInsideChart: context.isInsideChart,
+      chartType: context.chartType,
     };
 
     result.children = preserved.map((child: any) => {
@@ -235,10 +275,8 @@ function processChildren(
     }).filter((child: any) => child !== null);
 
     result._samplingInfo = createSamplingInfo(record);
-  } else
-  */
-  {
-    // 普通处理（默认行为）
+  } else {
+    // 普通处理
     const newContext = {
       parentName: node.name || '',
       depth: context.depth + 1,
@@ -267,7 +305,7 @@ export function processNode(
 
   // 深度限制
   if (context.depth > maxDepth) {
-    return createTruncatedResult(node);
+    return createTruncatedResult(node, maxDepth, context.depth);
   }
 
   // 检查是否应该过滤

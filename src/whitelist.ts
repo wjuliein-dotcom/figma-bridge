@@ -4,6 +4,26 @@ import { COMPONENT_COMPOSITION_WHITELIST } from './config.js';
 import { ProcessContext } from './types.js';
 
 /**
+ * 宽松匹配：检查 name 是否包含 keyword（支持前缀/后缀/单词边界）
+ */
+function looseMatch(name: string, keyword: string): boolean {
+  const lowerName = name.toLowerCase();
+  const lowerKeyword = keyword.toLowerCase();
+
+  // 完全相等
+  if (lowerName === lowerKeyword) return true;
+
+  // 名称以关键词开头
+  if (lowerName.startsWith(lowerKeyword)) return true;
+
+  // 名称包含关键词且前后有边界
+  const pattern = new RegExp(`[-_/\\s]${lowerKeyword}([-_/\\s]|$)`, 'i');
+  if (pattern.test(lowerName)) return true;
+
+  return false;
+}
+
+/**
  * 检查节点是否在白名单父组件下
  */
 export function isInWhitelistedParent(nodeName: string, context: ProcessContext): boolean {
@@ -11,14 +31,13 @@ export function isInWhitelistedParent(nodeName: string, context: ProcessContext)
 
   const parentNameLower = context.parentName.toLowerCase();
 
-  // 检查父组件是否在白名单中
+  // 检查父组件是否在白名单中（使用宽松匹配）
   for (const [parentPattern, allowedChildren] of Object.entries(COMPONENT_COMPOSITION_WHITELIST)) {
-    if (parentNameLower.includes(parentPattern.toLowerCase())) {
+    if (looseMatch(parentNameLower, parentPattern)) {
       // 父组件匹配，检查当前节点是否在允许列表中
       const nodeNameLower = nodeName.toLowerCase();
       const isAllowed = (allowedChildren as string[]).some((childPattern: string) =>
-        nodeNameLower === childPattern.toLowerCase() ||
-        nodeNameLower.includes(childPattern.toLowerCase())
+        looseMatch(nodeNameLower, childPattern)
       );
       if (isAllowed) return true;
     }

@@ -202,6 +202,14 @@ export interface VectorHellConfig {
   maxNestingDepth: number;
   /** 要保留的矢量属性白名单 */
   preserveVectorProps: string[];
+  /** 是否保留渐变数据（默认false，节省空间） */
+  preserveGradientData?: boolean;
+  /** 是否保留矢量路径信息（只保留数量，不保留完整数据） */
+  preserveVectorPaths?: boolean;
+  /** 是否保留矢量网络信息（只保留节点数） */
+  preserveVectorNetwork?: boolean;
+  /** 尺寸容差（用于判断图标的标准方比例） */
+  sizeToleranceRatio?: number;
 }
 
 export interface FingerprintConfig {
@@ -213,6 +221,12 @@ export interface FingerprintConfig {
   maxUniqueStructures: number;
   // 始终保留的特殊节点名称匹配（如展开行、选中态等）
   preservePatterns: string[];
+  // 是否保留禁用状态的行（默认true）
+  preserveDisabled?: boolean;
+  // 是否保留高亮/选中状态的行（默认true）
+  preserveHighlighted?: boolean;
+  // 最大采样比例（0-1），避免采样过多
+  maxSamplingRatio?: number;
 }
 
 export interface TransformOptions {
@@ -225,6 +239,10 @@ export interface TransformOptions {
   siderWidth?: number;
   /** 顶部头部高度阈值（默认64px），用于判断顶部header区域 */
   headerHeight?: number;
+  /** 侧边栏宽度容差（默认50px） */
+  siderWidthTolerance?: number;
+  /** 头部高度容差（默认20px） */
+  headerHeightTolerance?: number;
   /** 最大递归深度（防止深层嵌套） */
   maxDepth?: number;
   /** 是否启用智能指纹采样 */

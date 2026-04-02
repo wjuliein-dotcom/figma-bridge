@@ -12,22 +12,51 @@ export interface FilterContext {
   headerHeight: number;
   filterNames: string[];
   useDefaultFilter: boolean;
+  // 新增：容差配置
+  siderWidthTolerance?: number;
+  headerHeightTolerance?: number;
+  siderXTolerance?: number;
+  headerYTolerance?: number;
+}
+
+/**
+ * 宽松匹配：检查 name 是否以 keyword 开头或等于 keyword
+ * 避免 "menuitem" 匹配 "menu" 的问题
+ */
+function looseMatches(name: string, keyword: string): boolean {
+  const lowerName = name.toLowerCase();
+  const lowerKeyword = keyword.toLowerCase();
+
+  // 完全相等
+  if (lowerName === lowerKeyword) return true;
+
+  // 名称以关键词开头，后面是边界字符（-、_、空格、/）
+  const pattern = new RegExp(`^${lowerKeyword}([-_/\\s]|$)`, 'i');
+  if (pattern.test(lowerName)) return true;
+
+  // 名称包含关键词，且前后是边界字符
+  const includePattern = new RegExp(`[-_/\\s]${lowerKeyword}([-_/\\s]|$)`, 'i');
+  if (includePattern.test(lowerName)) return true;
+
+  return false;
 }
 
 /**
  * 通过位置和尺寸判断是否是页面级侧边菜单
  * 左侧菜单栏：x 接近 0，宽度接近 siderWidth
  */
-export function isPageLevelSider(node: any, siderWidth: number): boolean {
+export function isPageLevelSider(node: any, siderWidth: number, tolerance?: number): boolean {
   const box = node.absoluteBoundingBox;
   if (!box) return false;
 
   const { x, width, height } = box;
+  // 可配置的误差范围，默认 ±50px
+  const xTol = tolerance ?? 50;
+  const widthTol = tolerance ?? 50;
 
   // 左侧菜单栏特征：x 接近 0，宽度接近 siderWidth
-  // 允许一定误差范围（±50px）
-  const isLeftAligned = Math.abs(x) < 50;
-  const hasSiderWidth = Math.abs(width - siderWidth) < 50;
+  const isLeftAligned = Math.abs(x) < xTol;
+  const hasSiderWidth = Math.abs(width - siderWidth) < widthTol;
 
   return isLeftAligned && hasSiderWidth && height > 100; // 高度大于100排除小元素
 }
@@ -36,29 +65,27 @@ export function isPageLevelSider(node: any, siderWidth: number): boolean {
  * 通过位置和尺寸判断是否是页面级头部
  * 顶部头部：y 接近 0，高度接近 headerHeight
  */
-export function isPageLevelHeader(node: any, headerHeight: number): boolean {
+export function isPageLevelHeader(node: any, headerHeight: number, tolerance?: number): boolean {
   const box = node.absoluteBoundingBox;
   if (!box) return false;
 
   const { y, width, height } = box;
+  // 可配置的误差范围，默认 ±20px
+  const yTol = tolerance ?? 20;
+  const heightTol = tolerance ?? 20;
 
   // 顶部头部特征：y 接近 0，高度接近 headerHeight
-  // 允许一定误差范围（±20px）
-  const isTopAligned = Math.abs(y) < 50;
-  const hasHeaderHeight = Math.abs(height - headerHeight) < 20;
+  const isTopAligned = Math.abs(y) < yTol;
+  const hasHeaderHeight = Math.abs(height - headerHeight) < heightTol;
 
   return isTopAligned && hasHeaderHeight && width > 100; // 宽度大于100排除小元素
 }
 
 /**
- * 检查节点名称是否匹配过滤列表
+ * 检查节点名称是否匹配过滤列表（改进版：使用宽松匹配）
  */
 export function matchesFilter(nodeName: string, filterNames: string[]): boolean {
-  const lowerName = nodeName.toLowerCase();
-  return filterNames.some(filterName =>
-    lowerName === filterName.toLowerCase() ||
-    lowerName.includes(filterName.toLowerCase())
-  );
+  return filterNames.some(filterName => looseMatches(nodeName, filterName));
 }
 
 /**
@@ -72,6 +99,7 @@ function isNodeHidden(node: any): boolean {
 /**
  * 检查是否应该过滤
  * 新逻辑：先判断位置区域，再判断白名单
+ * 优化：支持自定义容差，改用宽松匹配
  */
 export function shouldFilter(
   node: any,
@@ -86,7 +114,7 @@ export function shouldFilter(
   if (!node.name) return false;
 
   const nodeName = node.name;
-  const { siderWidth, headerHeight, filterNames } = filterCtx;
+  const { siderWidth, headerHeight, filterNames, siderWidthTolerance, headerHeightTolerance, siderXTolerance, headerYTolerance } = filterCtx;
 
   // 1. 如果节点类型是基本图形，不过滤（这些是内容）
   if (PRESERVE_TYPES_IN_COMPONENTS.includes(node.type)) {
@@ -101,8 +129,9 @@ export function shouldFilter(
     nodeName.toLowerCase().includes('sidebar') ||
     nodeName.toLowerCase().includes('sider')
   ) {
-    // 只在左侧区域（x≈0, width≈siderWidth）内识别
-    if (isPageLevelSider(node, siderWidth)) {
+    // 使用可配置的容差参数
+    const effectiveTolerance = siderWidthTolerance ?? siderXTolerance;
+    if (isPageLevelSider(node, siderWidth, effectiveTolerance)) {
       // 在区域内，检查是否是白名单组件
       // 如果是白名单组件，保留；否则过滤
       return !isInWhitelistedParent(nodeName, context);
@@ -120,8 +149,9 @@ export function shouldFilter(
     nodeName.toLowerCase().includes('navigation') ||
     nodeName.includes('导航栏')
   ) {
-    // 只在顶部区域（y≈0, height≈headerHeight）内识别
-    if (isPageLevelHeader(node, headerHeight)) {
+    // 使用可配置的容差参数
+    const effectiveTolerance = headerHeightTolerance ?? headerYTolerance;
+    if (isPageLevelHeader(node, headerHeight, effectiveTolerance)) {
       // 在区域内，检查是否是白名单组件
       // 如果是白名单组件，保留；否则过滤
       return !isInWhitelistedParent(nodeName, context);
@@ -136,7 +166,7 @@ export function shouldFilter(
     return false;
   }
 
-  // 4. 检查是否匹配过滤列表
+  // 4. 检查是否匹配过滤列表（使用改进的宽松匹配）
   if (!matchesFilter(nodeName, filterNames)) {
     return false;
   }
