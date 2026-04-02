@@ -51,14 +51,26 @@ export interface ChartClues {
   dataPointCount: number;
   /** 是否圆形布局 */
   isCircularLayout: boolean;
-  /** 节点名称中的关键词 */
-  nameKeywords: string[];
+  /** 节点名称中的关键词（优化版：带置信度） */
+  nameKeywords: Array<{ type: string; adjustedConfidence: number; reasons: string[] }>;
   /** 子节点中包含的矩形数量 */
   rectangleCount: number;
   /** 子节点中包含的圆形数量 */
   circleCount: number;
   /** 子节点中包含的线数量 */
   lineCount: number;
+  /** 线条方向分析（优化） */
+  _lineOrientation?: {
+    hasHorizontalAxis: boolean;
+    hasVerticalAxis: boolean;
+  };
+  /** 数据排列模式（优化） */
+  _dataPattern?: {
+    isHorizontalBars: boolean;
+    isVerticalBars: boolean;
+    isScatterPattern: boolean;
+    isStackedPattern: boolean;
+  };
 }
 
 /**
@@ -86,7 +98,7 @@ export interface ChartSeries {
   /** 系列类型 */
   type: 'bar' | 'line' | 'pie' | 'scatter' | 'area';
   /** 数据 */
-  data: number[] | Array<{ name: string; value: number }>;
+  data: number[] | Array<{ name: string; value: number }> | Array<{ name: string; value: [number, number] }>;
   /** 样式线索 */
   style: {
     color?: string;

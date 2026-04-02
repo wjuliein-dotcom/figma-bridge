@@ -378,12 +378,219 @@ transform.ts
 
 ---
 
+## 修改二：图表识别模块优化（2026-04-02）
+
+### 目标
+优化图表识别模块的实现逻辑，提升识别准确率和数据提取质量。
+
+### 背景
+在实现图表识别功能后，发现以下问题影响识别效果：
+1. 名称关键词权重过高，缺乏视觉特征验证
+2. 决策树顺序问题导致误判
+3. 数值提取依赖文本，无法识别纯形状图表
+4. 坐标轴识别不精确
+5. 排除模式不全面
+
+### 解决方案
+
+#### 1. 决策树逻辑优化
+
+**新增函数**：
+- `analyzeLineOrientation()` - 分析线条方向，区分水平轴和垂直轴
+- `analyzeDataPattern()` - 分析数据排列模式（水平/垂直矩形条、散点分布、堆叠模式）
+
+**优化决策树优先级**：
+```typescript
+// 饼图：圆形布局最高优先级
+if (clues.isCircularLayout && !clues.hasAxes && clues.circleCount >= 3) { ... }
+
+// 柱状图：增加水平排列检测
+if (dataPattern.isHorizontalBars && (clues.hasAxes || clues.rectangleCount >= 3)) { ... }
+
+// 折线图：需要同时有水平轴和垂直轴
+if (lineOrientation.hasHorizontalAxis && lineOrientation.hasVerticalAxis && clues.hasLines) { ... }
+```
+
+#### 2. 名称关键词检测优化
+
+**新增函数**：`validateNameWithVisuals()`
+
+- 支持组合图表名称检测（如"柱状图和折线图对比"）
+- 名称匹配后进行二次视觉验证
+- 视觉冲突检测（如名称是饼图但有坐标轴）
+- 置信度动态调整
+
+```typescript
+// 优化后的名称提取
+function extractNameKeywords(name: string): Array<{ type: string; weight: number }> {
+  // 检测组合图表，降低权重
+  const isComboChart = /(和|与|对比|组合).*(图|chart)/i.test(name);
+  const weight = isComboChart ? 0.6 : 0.9;
+  // ...
+}
+
+// 视觉特征验证
+switch (kw.type) {
+  case 'bar':
+    if (!hasBars && !dataPattern.isHorizontalBars) {
+      adjustedConfidence -= 0.3; // 降低置信度
+      reasons.push('视觉特征不匹配：无可识别的矩形条');
+    }
+    break;
+  // ...
+}
+```
+
+#### 3. 数据提取逻辑优化
+
+**数值提取增强**：
+```typescript
+function extractNumericValue(node: any): number | null {
+  // 支持货币符号
+  let cleanedText = text
+    .replace(/[$¥€£]/g, '')
+    .replace(/%/g, '')
+    .replace(/,/g, '')  // 千分位
+    .trim();
+
+  // 支持中文数字
+  cleanedText = cleanedText.replace(/一/g, '1').replace(/二/g, '2') /* ... */;
+
+  // 支持科学计数法
+  const match = cleanedText.match(/-?\d+\.?\d*(?:[eE][+-]?\d+)?/);
+  // ...
+}
+```
+
+**位置推断改进**：
+```typescript
+function inferValueFromPosition(node, nodeBounds, direction) {
+  // 将实际尺寸转换为相对百分比
+  const normalizedValue = Math.round((bounds.height / maxHeight) * 100);
+  return normalizedValue;
+}
+```
+
+**多系列提取**：
+```typescript
+// 按颜色分组自动提取多个系列
+const colorGroups = new Map<string, number[]>();
+for (const child of children) {
+  if (child.type === 'RECTANGLE') {
+    const colorKey = color || 'default';
+    colorGroups.get(colorKey)?.push(value);
+  }
+}
+// 将颜色分组转换为系列
+```
+
+**散点图支持**：
+```typescript
+// 支持 [x, y] 坐标格式
+data: number[] | Array<{ name: string; value: number }> | Array<{ name: string; value: [number, number] }>;
+```
+
+#### 4. 坐标轴识别优化
+
+```typescript
+// 使用位置区域分析
+const leftZone = nodeBounds.x + nodeBounds.width * 0.15;
+const rightZone = nodeBounds.x + nodeBounds.width * 0.85;
+const bottomZone = nodeBounds.y + nodeBounds.height * 0.7;
+
+// 底部区域 + 宽度 > 高度 = X轴标签
+// 左侧区域 + 高度 > 宽度 = Y轴标签
+
+// 排除纯数值标签
+const cleanYLabels = yAxisLabels.filter(t => {
+  const num = extractNumericValue({ characters: t } as any);
+  return num === null;
+});
+```
+
+#### 5. 排除模式和边缘情况
+
+**扩展排除模式**（从6个扩展到40+个）：
+```typescript
+const excludePatterns = [
+  // 基础组件
+  'button', 'btn', 'icon', 'input', 'textarea', 'select', 'checkbox', 'radio', 'switch',
+  // 容器组件
+  'card', 'modal', 'dialog', 'drawer', 'popup', 'tooltip', 'popover', 'dropdown', 'menu',
+  // 导航组件
+  'nav', 'navbar', 'tabs', 'tab', 'breadcrumb', 'pagination', 'sider', 'sidebar',
+  // 展示组件
+  'avatar', 'badge', 'tag', 'progress', 'skeleton', 'loading', 'empty', 'alert',
+  // ...
+];
+```
+
+**动态大小阈值**：
+```typescript
+if (bounds.width < 80 || bounds.height < 60) return false;  // 太小
+if (bounds.width > 2000 || bounds.height > 1500) return false;  // 太大
+```
+
+**数据验证**：
+```typescript
+// 验证数值合理性
+const validValues = series.data.filter((d: any) => {
+  if (typeof d === 'number') {
+    return !isNaN(d) && isFinite(d);
+  }
+  return false;
+});
+```
+
+### 类型更新
+
+```typescript
+// ChartClues 新增字段
+nameKeywords: Array<{ type: string; adjustedConfidence: number; reasons: string[] }>;
+_lineOrientation?: { hasHorizontalAxis: boolean; hasVerticalAxis: boolean };
+_dataPattern?: {
+  isHorizontalBars: boolean;
+  isVerticalBars: boolean;
+  isScatterPattern: boolean;
+  isStackedPattern: boolean;
+};
+
+// ChartSeries 支持散点图
+data: number[] | Array<{ name: string; value: number }> | Array<{ name: string; value: [number, number] }>;
+```
+
+### 影响文件
+
+- `src/chart-detection.ts` - 大幅优化，添加多个新函数
+- `src/types.ts` - 更新 ChartClues 和 ChartSeries 类型定义
+
+### 优化效果
+
+| 优化项 | 优化前 | 优化后 |
+|--------|--------|--------|
+| 名称关键词权重 | 固定 0.9 | 动态调整 0.5-0.9 |
+| 坐标轴识别 | 任意 LINE 节点 | 水平+垂直方向验证 |
+| 数值提取 | 简单正则 | 支持货币、百分比、中文数字 |
+| 多系列提取 | 仅支持单个 | 按颜色自动分组 |
+| 排除模式 | 6 个 | 40+ 个常见组件 |
+| 散点图支持 | 不支持 | 支持 [x,y] 坐标 |
+
+### 注意事项
+
+1. **识别优先级**：名称关键词 + 视觉特征双重验证
+2. **组合图表**：降低置信度，需要更多视觉特征支持
+3. **数据推断**：无文本值时使用相对百分比
+4. **数据验证**：过滤 NaN、Infinity 等无效值
+
+---
+
 ## 修改汇总表
 
 | 时间 | 类型 | 主要内容 | 影响文件 |
 |------|------|----------|----------|
 | 2026-04-01 | 功能新增 | 图表识别与数据提取功能，支持13种图表类型，提取数据供ECharts/G6使用 | `src/chart-detection.ts`(新增), `src/types.ts`, `src/config.ts`, `src/node-processor.ts`, `src/transform.ts`, `src/meta-builder.ts`, `src/index.ts`, `CLAUDE.md` |
+| 2026-04-02 | 功能优化 | 图表识别模块优化：决策树重构、名称验证、数据提取增强、坐标轴优化、排除模式扩展 | `src/chart-detection.ts`, `src/types.ts` |
 
 ---
 
-*记录生成时间: 2026-04-01*
+*记录生成时间: 2026-04-02*
