@@ -1,0 +1,29 @@
+# 依赖目录
+node_modules/
+
+# Git 仓库
+.git/
+
+# 编译输出
+dist/
+
+# 文档目录
+docs/
+
+# 日志文件
+*.log
+npm-debug.log*
+
+# 环境配置文件
+.env
+.env.local
+
+# 图片资源
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.ico
+*.webp
+*.bmp
