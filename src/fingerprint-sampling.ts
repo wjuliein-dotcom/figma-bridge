@@ -5,6 +5,50 @@ import { NodeFingerprint, SamplingRecord, FingerprintConfig } from './types.js';
 import { DEFAULT_FINGERPRINT_CONFIG } from './config.js';
 
 /**
+ * 检查节点是否是表单字段组件
+ */
+function isFormFieldNode(node: any, formFieldPatterns: string[]): boolean {
+  const nodeName = (node.name || '').toLowerCase();
+  return formFieldPatterns.some(pattern => nodeName.includes(pattern.toLowerCase()));
+}
+
+/**
+ * 收集节点的所有文本内容作为指纹
+ */
+function collectTextFingerprint(node: any): string {
+  if (!node.children || node.children.length === 0) {
+    return '';
+  }
+
+  // 收集所有 TEXT 节点的字符内容
+  const textContents: string[] = [];
+
+  function traverse(n: any) {
+    if (n.type === 'TEXT' && n.characters) {
+      // 收集文本内容，去除首尾空格
+      const text = n.characters.trim();
+      if (text.length > 0) {
+        textContents.push(text);
+      }
+    }
+    if (n.children && Array.isArray(n.children)) {
+      n.children.forEach(traverse);
+    }
+  }
+
+  node.children.forEach(traverse);
+
+  // 如果没有文本内容，返回空字符串
+  if (textContents.length === 0) {
+    return '';
+  }
+
+  // 生成文本指纹：按内容排序后取前10个，去重后拼接
+  const uniqueTexts = [...new Set(textContents)].slice(0, 10);
+  return uniqueTexts.sort().join('|');
+}
+
+/**
  * 计算节点的结构指纹
  * 优化：使用更稳定的指纹算法，减少对名称的依赖
  */
@@ -36,20 +80,32 @@ export function calculateFingerprint(node: any, depth: number = 0): NodeFingerpr
   // 4. 生成结构哈希（不包含名称）
   const structureHash = `${node.type}:${node.layoutMode || 'NONE'}:${node.children?.length || 0}:${childTypes.substring(0, 100)}`;
 
+  // 5. 收集文本指纹（用于区分文本内容不同的表单项）
+  const textFingerprint = collectTextFingerprint(node);
+
   return {
     structureHash,
     childTypes,
     propSignature: propKeys,
     depth,
     childCount: node.children?.length || 0,
+    textFingerprint,
+    isFormField: false, // 稍后在调用处设置
   };
 }
 
 /**
  * 改进：比较两个指纹的相似度
- * 增加更多考量因素：布局属性、尺寸比例等
+ * 增加更多考量因素：布局属性、尺寸比例、表单文本差异等
  */
-export function compareFingerprints(fp1: NodeFingerprint, fp2: NodeFingerprint): number {
+export function compareFingerprints(
+  fp1: NodeFingerprint,
+  fp2: NodeFingerprint,
+  config?: Partial<FingerprintConfig>
+): number {
+  // 获取文本差异阈值
+  const textThreshold = config?.textDifferenceThreshold ?? 0.8;
+
   // 如果基本结构不同，相似度为 0
   if (fp1.structureHash !== fp2.structureHash) {
     return 0;
@@ -63,6 +119,23 @@ export function compareFingerprints(fp1: NodeFingerprint, fp2: NodeFingerprint):
       return 0.7; // 略降低但不是0
     }
     return 0.5;
+  }
+
+  // 【新增】检查文本指纹差异（针对表单项）
+  // 如果两个节点都有文本指纹但内容不同，视为不同结构
+  if (fp1.textFingerprint && fp2.textFingerprint && fp1.textFingerprint !== fp2.textFingerprint) {
+    // 计算文本相似度
+    const texts1 = fp1.textFingerprint.split('|');
+    const texts2 = fp2.textFingerprint.split('|');
+    const allTexts = [...new Set([...texts1, ...texts2])];
+    const commonTexts = texts1.filter(t => texts2.includes(t));
+    const textSimilarity = allTexts.length > 0 ? commonTexts.length / allTexts.length : 1;
+
+    // 如果文本差异较大（低于阈值），降低相似度
+    if (textSimilarity < textThreshold) {
+      // 对于有文本差异的节点，大幅降低相似度
+      return 0.3; // 文本不同的表单项应该被视为不同结构
+    }
   }
 
   // 属性签名完全匹配
@@ -144,7 +217,7 @@ export function shouldPreserveNode(node: any, preservePatterns: string[], config
 /**
  * 对子节点进行智能指纹采样
  * 保留所有不同结构的节点，丢弃完全重复的结构
- * 优化：改进采样逻辑，支持更多配置选项
+ * 优化：改进采样逻辑，支持更多配置选项，包括表单项文本差异保护
  */
 export function fingerprintSampling(
   children: any[],
@@ -156,9 +229,15 @@ export function fingerprintSampling(
   const fingerprintMap: Map<string, number[]> = new Map();
   const duplicatesCount: Map<number, number> = new Map();
 
+  // 获取表单字段模式（用于标记）
+  const formFieldPatterns = config.formFieldPatterns || [];
+
   // 第一轮：计算所有指纹
   for (let i = 0; i < children.length; i++) {
-    fingerprints.set(i, calculateFingerprint(children[i], 0));
+    const fp = calculateFingerprint(children[i], 0);
+    // 标记是否为表单字段
+    fp.isFormField = isFormFieldNode(children[i], formFieldPatterns);
+    fingerprints.set(i, fp);
   }
 
   // 第二轮：智能选择保留的节点
@@ -175,14 +254,34 @@ export function fingerprintSampling(
       continue;
     }
 
-    // 2. 检查是否与已保留的节点结构相似
+    // 2. 【新增】检查是否是表单字段，如果是，检查是否有文本内容差异
+    // 如果是表单字段且有文本内容，应该保留所有不同的文本
+    if (currentFp.isFormField && currentFp.textFingerprint) {
+      // 表单字段如果有不同的文本内容，优先保留
+      const isTextDuplicate = preservedIndices.some(preservedIdx => {
+        const preservedFp = fingerprints.get(preservedIdx)!;
+        return preservedFp.isFormField &&
+               preservedFp.textFingerprint === currentFp.textFingerprint;
+      });
+
+      if (!isTextDuplicate) {
+        preservedIndices.push(i);
+        duplicatesCount.set(i, 0);
+        const fpKey = `${currentFp.structureHash}:${currentFp.textFingerprint}`;
+        fingerprintMap.set(fpKey, [...(fingerprintMap.get(fpKey) || []), i]);
+        continue;
+      }
+    }
+
+    // 3. 检查是否与已保留的节点结构相似
     let isDuplicate = false;
     let similarToIndex = -1;
     let highestSimilarity = 0;
 
     for (const preservedIdx of preservedIndices) {
       const preservedFp = fingerprints.get(preservedIdx)!;
-      const similarity = compareFingerprints(currentFp, preservedFp);
+      // 传递配置参数，用于文本差异判断
+      const similarity = compareFingerprints(currentFp, preservedFp, config);
 
       if (similarity >= config.similarityThreshold && similarity > highestSimilarity) {
         isDuplicate = true;
@@ -191,7 +290,7 @@ export function fingerprintSampling(
       }
     }
 
-    // 3. 决策：保留或跳过
+    // 4. 决策：保留或跳过
     if (!isDuplicate && preservedIndices.length < config.maxUniqueStructures) {
       // 新结构，且未达到最大保留数
       preservedIndices.push(i);

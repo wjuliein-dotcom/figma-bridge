@@ -1231,6 +1231,139 @@ await getFigmaNode({
 
 ---
 
+## 修改五：智能指纹采样优化 - 保护表单项（2026-04-09）
+
+### 目标
+优化智能指纹采样逻辑，防止查询条件、表单等组件被误压缩。
+
+### 背景
+原有的指纹采样逻辑仅基于结构相似度判断，会将 TEXT 属性不同的表单项（如 `[输入框(姓名)]`、`[输入框(电话)]`、`[输入框(地址)]`）视为相同结构并压缩，导致查询条件丢失。此外，小组件（如输入框、选择框）不应该参与指纹采样。
+
+### 解决方案
+
+#### 1. 增加文本指纹特征（`src/fingerprint-sampling.ts`）
+
+新增 `collectTextFingerprint()` 函数，收集 TEXT 子节点的字符内容：
+
+```typescript
+function collectTextFingerprint(node: any): string {
+  // 收集所有 TEXT 节点的字符内容
+  const textContents: string[] = [];
+  // ...遍历子节点收集文本
+  // 生成文本指纹：按内容排序后取前10个，去重后拼接
+  return uniqueTexts.sort().join('|');
+}
+```
+
+修改 `calculateFingerprint()` 函数，在指纹中增加 `textFingerprint` 字段。
+
+#### 2. 修改相似度比较逻辑（`src/fingerprint-sampling.ts`）
+
+在 `compareFingerprints()` 中增加文本差异检测：
+
+```typescript
+// 检查文本指纹差异
+if (fp1.textFingerprint && fp2.textFingerprint && fp1.textFingerprint !== fp2.textFingerprint) {
+  // 计算文本相似度
+  const textSimilarity = commonTexts.length / allTexts.length;
+  // 如果文本差异较大（低于阈值），降低相似度
+  if (textSimilarity < textThreshold) {
+    return 0.3; // 文本不同的表单项应该被视为不同结构
+  }
+}
+```
+
+#### 3. 增加最小子节点数量限制（`src/node-processor.ts`）
+
+在触发指纹采样时增加最小子节点数量要求：
+
+```typescript
+// 条件：1. 启用了指纹采样 2. 节点名称匹配采样目标 3. 子节点数量 >= 最小要求
+const minChildren = fingerprintConfig.minChildrenForSampling ?? 3;
+if (enableFingerprintSampling &&
+    isFingerprintSamplingTarget(node.name || '', fingerprintConfig) &&
+    node.children.length >= minChildren) {
+  // 智能指纹采样
+}
+```
+
+#### 4. 增加配置项（`src/types.ts`, `src/config.ts`）
+
+**新增类型**：
+```typescript
+interface FingerprintConfig {
+  // ... 现有配置
+  formFieldPatterns?: string[];       // 表单字段关键词
+  textDifferenceThreshold?: number;   // 文本差异敏感度
+  minChildrenForSampling?: number;   // 最少子节点数量才进行采样
+}
+```
+
+**新增默认配置**：
+```typescript
+export const DEFAULT_FINGERPRINT_CONFIG = {
+  // ... 现有配置
+  minChildrenForSampling: 3, // 最少3个子节点才进行采样
+  formFieldPatterns: [
+    'input', 'textfield', 'textarea',
+    'select', 'dropdown', 'combobox',
+    'checkbox', 'radio', 'switch',
+    'datepicker', 'search', 'query',
+    'filter', 'form-item', 'field',
+  ],
+  textDifferenceThreshold: 0.8,
+};
+```
+
+**在 preservePatterns 中增加表单项关键词**：
+```typescript
+preservePatterns: [
+  // ... 现有配置
+  // 查询条件/表单项
+  'query', 'filter', 'search', 'form-item', 'formitem', 'field', 'condition',
+],
+```
+
+#### 5. 表单字段优先保留逻辑（`src/fingerprint-sampling.ts`）
+
+在 `fingerprintSampling()` 函数中，对表单字段进行特殊处理：
+
+```typescript
+// 如果是表单字段且有文本内容，优先保留不同文本的项
+if (currentFp.isFormField && currentFp.textFingerprint) {
+  const isTextDuplicate = preservedIndices.some(preservedIdx => {
+    const preservedFp = fingerprints.get(preservedIdx)!;
+    return preservedFp.isFormField &&
+           preservedFp.textFingerprint === currentFp.textFingerprint;
+  });
+  if (!isTextDuplicate) {
+    preservedIndices.push(i);
+    // ...
+  }
+}
+```
+
+### 效果
+
+| 组件类型 | 子节点数 | 修复前 | 修复后 |
+|---------|---------|--------|--------|
+| 查询条件(姓名) | 2 | 被压缩 | ✅ 保留 |
+| 查询条件(电话) | 2 | 被压缩 | ✅ 保留 |
+| 查询条件(地址) | 2 | 被压缩 | ✅ 保留 |
+| 单个输入框 | 1-2 | 可能误采样 | ❌ 不采样 |
+| 选择框 | 2-3 | 可能误采样 | ❌ 不采样 |
+| 表格行 | 5-10 | 采样 | ✅ 采样 |
+| 列表项 | 3-8 | 采样 | ✅ 采样 |
+
+### 影响文件
+
+- `src/fingerprint-sampling.ts` - 核心逻辑修改
+- `src/types.ts` - 新增类型定义
+- `src/config.ts` - 新增配置项
+- `src/node-processor.ts` - 调整触发条件
+
+---
+
 ## 修改汇总表
 
 | 时间 | 类型 | 主要内容 | 影响文件 |
@@ -1239,6 +1372,7 @@ await getFigmaNode({
 | 2026-04-02 | 功能优化 | 图表识别模块优化：决策树重构、名称验证、数据提取增强 | `src/chart-detection.ts`, `src/types.ts` |
 | 2026-04-02 | 漏洞修复 | 布局过滤、矢量优化、指纹采样、图表识别、节点处理全面优化 | `src/filter.ts`, `src/whitelist.ts`, `src/vector-optimization.ts`, `src/fingerprint-sampling.ts`, `src/node-processor.ts`, `src/chart-detection.ts`, `src/types.ts`, `src/config.ts`, `src/transform.ts`, `src/index.ts` |
 | 2026-04-09 | 功能新增 | 主题色映射功能：支持亮色/暗色主题、13种预设颜色梯度 | `src/color-mapping.ts`(新增), `src/config.ts`, `src/types.ts`, `src/node-processor.ts`, `src/transform.ts`, `src/index.ts` |
+| 2026-04-09 | 功能优化 | 智能指纹采样优化：保护表单项、增加最小子节点数量限制 | `src/fingerprint-sampling.ts`, `src/types.ts`, `src/config.ts`, `src/node-processor.ts` |
 
 ---
 

@@ -219,6 +219,8 @@ export interface FingerprintConfig {
   similarityThreshold: number;
   // 最大保留的唯一结构数
   maxUniqueStructures: number;
+  // 最少子节点数量才进行采样（避免对小组件进行采样），默认 3
+  minChildrenForSampling?: number;
   // 始终保留的特殊节点名称匹配（如展开行、选中态等）
   preservePatterns: string[];
   // 是否保留禁用状态的行（默认true）
@@ -227,6 +229,10 @@ export interface FingerprintConfig {
   preserveHighlighted?: boolean;
   // 最大采样比例（0-1），避免采样过多
   maxSamplingRatio?: number;
+  // 表单字段关键词（这些组件的文本差异应被保留）
+  formFieldPatterns?: string[];
+  // 文本差异敏感度（默认0.8，低于此值视为不同结构）
+  textDifferenceThreshold?: number;
 }
 
 export interface TransformOptions {
@@ -291,6 +297,10 @@ export interface NodeFingerprint {
   depth: number;
   // 子节点数量
   childCount: number;
+  // 文本指纹（用于区分文本内容不同的表单项）
+  textFingerprint?: string;
+  // 是否包含表单相关组件
+  isFormField?: boolean;
 }
 
 // 采样结果记录

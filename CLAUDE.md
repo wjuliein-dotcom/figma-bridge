@@ -127,10 +127,20 @@ FILE_KEY=your_figma_file_key
 - 特殊状态（展开、选中、禁用）始终保留
 - **默认启用**，可手动关闭
 
+**触发条件**：
+```
+采样触发 = 启用采样 AND 名称匹配(namePatterns) AND 子节点数量 >= 3
+```
+
 **特殊状态识别**：
 - 命名模式：`expand`、`selected`、`active`、`disabled` 等
 - 变体属性：`componentProperties.selected.value`、`expanded.value` 等
 - 异常尺寸：高度 > 500px 的行（可能是汇总行）
+
+**表单项保护**：
+- 识别表单项：`input`、`select`、`checkbox`、`search`、`query`、`filter` 等
+- 文本指纹：收集 TEXT 子节点内容，文本不同视为不同结构
+- 最小子节点限制：只有 ≥3 个子节点的组件才进行采样，避免对输入框等小组件采样
 
 **配置参数**：
 ```typescript
@@ -139,9 +149,12 @@ FILE_KEY=your_figma_file_key
   fingerprintConfig: {
     similarityThreshold: number,    // 相似度阈值，默认 0.95
     maxUniqueStructures: number,    // 最大保留结构数，默认 5
+    minChildrenForSampling: number, // 最少子节点数量，默认 3
     preserveDisabled?: boolean,     // 保留禁用状态，默认 true
-    preserveHighlighted?: boolean,   // 保留高亮状态，默认 true
-    maxSamplingRatio?: number,      // 最大采样比例，默认 0.5
+    preserveHighlighted?: boolean,  // 保留高亮状态，默认 true
+    maxSamplingRatio?: number,     // 最大采样比例，默认 0.5
+    formFieldPatterns?: string[],   // 表单字段关键词
+    textDifferenceThreshold?: number, // 文本差异阈值，默认 0.8
   }
 }
 ```
@@ -484,10 +497,13 @@ interface FingerprintConfig {
   namePatterns: string[];
   similarityThreshold: number;
   maxUniqueStructures: number;
+  minChildrenForSampling?: number;  // 最少子节点数量，默认 3
   preservePatterns: string[];
   preserveDisabled?: boolean;
   preserveHighlighted?: boolean;
   maxSamplingRatio?: number;
+  formFieldPatterns?: string[];       // 表单字段关键词
+  textDifferenceThreshold?: number;   // 文本差异敏感度，默认 0.8
 }
 
 // 图表配置
@@ -771,7 +787,7 @@ const fullResult = await getFigmaNode({
 3. **深度限制**: `maxDepth` 防止深层嵌套导致数据爆炸，默认 10 层
 4. **数据量**:
    - 矢量优化：默认启用
-   - 指纹采样：默认启用
+   - 指纹采样：默认启用（仅对 ≥3 个子节点的 Table/List 等组件生效）
    - 图表识别：默认启用
    - 颜色映射：默认启用
 5. **布局类型**: 支持 `flex-row`、`flex-col`、`flex-wrap`、`grid`、`absolute`
@@ -786,11 +802,19 @@ const fullResult = await getFigmaNode({
    - 通过 `themeMode` 参数区分亮色/暗色主题
    - 支持 13 种预设颜色 × 10 级梯度（约 200 个颜色）
    - 低于置信度阈值的匹配不输出
+8. **指纹采样**:
+   - 仅对 Table、List 等多项组件生效
+   - 最小 3 个子节点才触发采样，输入框等小组件不会采样
+   - 表单字段（input、select、search 等）的文本差异会被识别，不同文本视为不同结构
 
 ## 版本信息
 
-- **当前版本**: 1.2.0
-- **更新内容**: 新增主题色映射功能，支持亮色/暗色主题、13种预设颜色梯度
+- **当前版本**: 1.2.1
+- **更新内容**:
+  - 智能指纹采样优化：保护表单项（查询条件等）不被误压缩
+  - 新增最小子节点数量限制（默认3个），避免对输入框等小组件采样
+  - 新增文本指纹特征，文本内容不同的表单项视为不同结构
+  - 新增主题色映射功能，支持亮色/暗色主题、13种预设颜色梯度
 
 ## 相关文档
 

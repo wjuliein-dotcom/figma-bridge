@@ -266,7 +266,11 @@ function processChildren(
   }
 
   // 检查是否启用指纹采样
-  if (enableFingerprintSampling && isFingerprintSamplingTarget(node.name || '', fingerprintConfig) && node.children.length > 1) {
+  // 条件：1. 启用了指纹采样 2. 节点名称匹配采样目标 3. 子节点数量 >= 最小要求
+  const minChildren = fingerprintConfig.minChildrenForSampling ?? 3;
+  if (enableFingerprintSampling &&
+      isFingerprintSamplingTarget(node.name || '', fingerprintConfig) &&
+      node.children.length >= minChildren) {
     // 智能指纹采样
     const { preserved, record } = fingerprintSampling(node.children, fingerprintConfig);
 

@@ -168,6 +168,7 @@ export const DEFAULT_FINGERPRINT_CONFIG: FingerprintConfig = {
   ],
   similarityThreshold: 0.95, // 95% 相似度视为相同结构
   maxUniqueStructures: 5,    // 增加到5个唯一结构
+  minChildrenForSampling: 3, // 最少3个子节点才进行采样，避免对小组件（如输入框、选择框）进行采样
   // 始终保留的特殊节点名称匹配
   preservePatterns: [
     // 展开/收起
@@ -182,10 +183,22 @@ export const DEFAULT_FINGERPRINT_CONFIG: FingerprintConfig = {
     'header-row', 'headerrow', 'summary', 'summary-row',
     // 高亮/强调
     'highlight', 'emphasized', 'important', 'primary', 'featured',
+    // 查询条件/表单项（新增）
+    'query', 'filter', 'search', 'form-item', 'formitem', 'field', 'condition',
   ],
   preserveDisabled: true,    // 默认保留禁用状态
   preserveHighlighted: true,  // 默认保留高亮状态
-  maxSamplingRatio: 0.5,      // 最多采样50%的数据
+  maxSamplingRatio: 0.5,     // 最多采样50%的数据
+  // 表单字段关键词（这些组件的文本差异应被保留）
+  formFieldPatterns: [
+    'input', 'textfield', 'text-field', 'textarea',
+    'select', 'dropdown', 'combobox',
+    'checkbox', 'radio', 'switch', 'toggle',
+    'datepicker', 'date-picker', 'timepicker', 'time-picker',
+    'search', 'query', 'filter', 'form-item', 'formitem',
+    'field', 'condition', 'criteria', 'param',
+  ],
+  textDifferenceThreshold: 0.8, // 文本差异阈值，低于此值视为不同结构
 };
 
 // 图表相关的属性白名单
