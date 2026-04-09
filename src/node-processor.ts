@@ -6,6 +6,7 @@ import {
   FingerprintConfig,
   VectorHellConfig,
   ChartConfig,
+  ColorMappingConfig,
 } from './types.js';
 import { FilterContext, shouldFilter } from './filter.js';
 import { PRESERVE_TYPES_IN_COMPONENTS } from './config.js';
@@ -24,20 +25,27 @@ import {
   analyzeChart,
   getChartConfig,
 } from './chart-detection.js';
+import { mapNodeColors, shouldSkipColorMapping } from './color-mapping.js';
 
 export interface ProcessorDependencies {
   filterCtx: FilterContext;
   fingerprintConfig: FingerprintConfig;
   vectorConfig: VectorHellConfig;
   chartConfig: ChartConfig;
+  colorMappingConfig: ColorMappingConfig;
   enableFingerprintSampling: boolean;
+  enableColorMapping: boolean;
   maxDepth: number;
 }
 
 /**
- * 创建基础结果对象（改进：支持更多布局类型）
+ * 创建基础结果对象（改进：支持更多布局类型和颜色映射）
  */
-function createBaseResult(node: any): any {
+function createBaseResult(
+  node: any,
+  context: ProcessContext,
+  deps: ProcessorDependencies
+): any {
   // 优化：更准确的布局类型判断
   let layout: string;
 
@@ -61,7 +69,7 @@ function createBaseResult(node: any): any {
     layout = 'flex-col'; // 默认纵向
   }
 
-  return {
+  const result: any = {
     id: node.id,
     name: node.name,
     type: node.type,
@@ -83,6 +91,22 @@ function createBaseResult(node: any): any {
       paddingRight: node.paddingRight,
     },
   };
+
+  // 颜色映射
+  if (deps.enableColorMapping && deps.colorMappingConfig.enabled) {
+    const skipMapping = shouldSkipColorMapping(node, { isInsideIcon: context.isInsideIcon });
+    if (!skipMapping) {
+      const colorMapping = mapNodeColors(node, {
+        themeColors: deps.colorMappingConfig.themeColors,
+        confidenceThreshold: deps.colorMappingConfig.confidenceThreshold
+      });
+      if (colorMapping) {
+        result._colorMapping = colorMapping;
+      }
+    }
+  }
+
+  return result;
 }
 
 /**
@@ -353,7 +377,7 @@ export function processNode(
   }
 
   // 普通节点处理
-  const result = createBaseResult(node);
+  const result = createBaseResult(node, context, deps);
   processChildren(node, context, deps, result);
 
   return result;

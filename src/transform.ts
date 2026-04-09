@@ -8,6 +8,29 @@ import { getFingerprintConfig } from './fingerprint-sampling.js';
 import { getChartConfig } from './chart-detection.js';
 import { processNode } from './node-processor.js';
 import { buildMetaInfo } from './meta-builder.js';
+import { DEFAULT_THEME_COLORS, DARK_THEME_COLORS, ThemeMode, generateFullLightThemeColors, generateFullDarkThemeColors } from './config.js';
+
+/**
+ * 获取颜色映射配置
+ */
+function getColorMappingConfig(
+  userConfig: any = {},
+  themeMode?: ThemeMode
+): any {
+  // 根据主题模式选择对应的完整颜色配置（包含预设颜色梯度）
+  let defaultThemeColors = generateFullLightThemeColors();
+  if (themeMode === 'dark') {
+    defaultThemeColors = generateFullDarkThemeColors();
+  }
+
+  return {
+    enabled: true,
+    confidenceThreshold: 0.8,
+    skipIconColors: true,
+    themeColors: defaultThemeColors,
+    ...userConfig,
+  };
+}
 
 /**
  * 将 Figma 节点转换为结构化 DSL
@@ -31,6 +54,9 @@ export function transformToDSL(node: any, options: TransformOptions = {}) {
     vectorHellConfig: userVectorHellConfig = {},
     enableChartDetection = true,
     chartConfig: userChartConfig = {},
+    enableColorMapping = true,  // 默认启用颜色映射
+    colorMappingConfig: userColorMappingConfig = {},
+    themeMode = 'light' as ThemeMode,  // 主题模式，默认亮色
   } = options;
 
   // 合并配置
@@ -39,6 +65,8 @@ export function transformToDSL(node: any, options: TransformOptions = {}) {
   vectorConfig.enabled = enableVectorHellOptimization !== false;
   const chartConfig = getChartConfig(userChartConfig);
   chartConfig.enabled = enableChartDetection !== false;
+  const colorMappingConfig = getColorMappingConfig(userColorMappingConfig, themeMode);
+  colorMappingConfig.enabled = enableColorMapping !== false;
 
   // 获取过滤列表
   const namesToFilter = getFilterNames(useDefaultFilter, filterNames);
@@ -58,7 +86,9 @@ export function transformToDSL(node: any, options: TransformOptions = {}) {
     fingerprintConfig,
     vectorConfig,
     chartConfig,
+    colorMappingConfig,
     enableFingerprintSampling,
+    enableColorMapping,
     maxDepth,
   };
 

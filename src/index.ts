@@ -32,7 +32,7 @@ if (!FILE_KEY) {
 // --- 步骤 2：初始化 Server ---
 const server = new McpServer({
     name: "figma-bridge",
-    version: "1.1.0",
+    version: "1.2.0",
 });
 
 // --- 步骤 3：定义工具，并调用转换函数 ---
@@ -80,7 +80,23 @@ server.tool(
         chartConfig: z.object({
             minDataPoints: z.number().optional().describe("最少数据点数量才视为图表（默认3）"),
             confidenceThreshold: z.number().optional().describe("图表识别置信度阈值（0-1，默认0.6）"),
-        }).optional().describe("图表检测配置选项")
+        }).optional().describe("图表检测配置选项"),
+
+        // 颜色映射
+        enableColorMapping: z.boolean().optional().default(true).describe("是否启用颜色映射（默认启用），将Figma颜色映射到主题色"),
+        colorMappingConfig: z.object({
+            confidenceThreshold: z.number().optional().describe("颜色映射置信度阈值（0-1，默认0.8），低于此值不进行映射"),
+            skipIconColors: z.boolean().optional().describe("是否跳过图标颜色（默认true）"),
+            themeColors: z.array(z.object({
+                token: z.string().describe("主题色token名称"),
+                value: z.string().describe("十六进制颜色值，如 #1677ff"),
+                category: z.enum(['primary', 'success', 'warning', 'error', 'info', 'neutral']).describe("颜色类别"),
+                level: z.number().optional().describe("颜色梯度级别（1-10）")
+            })).optional().describe("自定义主题色配置，会覆盖默认配置")
+        }).optional().describe("颜色映射配置选项"),
+
+        // 主题模式
+        themeMode: z.enum(['light', 'dark']).optional().default('light').describe("主题模式，light 使用亮色主题色，dark 使用暗色主题色（默认 light）")
     },
     async ({
         nodeId,
@@ -97,7 +113,10 @@ server.tool(
         enableFingerprintSampling = true,
         fingerprintConfig = {},
         enableChartDetection = true,
-        chartConfig = {}
+        chartConfig = {},
+        enableColorMapping = true,
+        colorMappingConfig = {},
+        themeMode = 'light'
     }: {
         nodeId: string,
         framework?: 'vue' | 'react' | 'html',
@@ -113,7 +132,10 @@ server.tool(
         enableFingerprintSampling?: boolean,
         fingerprintConfig?: any,
         enableChartDetection?: boolean,
-        chartConfig?: any
+        chartConfig?: any,
+        enableColorMapping?: boolean,
+        colorMappingConfig?: any,
+        themeMode?: 'light' | 'dark'
     }) => {
         try {
             // 标准化节点ID：将连字符替换为冒号（Figma标准格式）
@@ -157,7 +179,10 @@ server.tool(
                 enableFingerprintSampling,
                 fingerprintConfig,
                 enableChartDetection,
-                chartConfig
+                chartConfig,
+                enableColorMapping,
+                colorMappingConfig,
+                themeMode
             });
 
             return {

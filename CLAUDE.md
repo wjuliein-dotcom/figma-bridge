@@ -9,13 +9,14 @@ src/
 ├── index.ts              # MCP Server 入口，工具定义
 ├── transform.ts          # 转换主入口，整合所有模块
 ├── types.ts              # 类型定义
-├── config.ts             # 默认配置（过滤名称、白名单、采样配置）
+├── config.ts             # 默认配置（过滤名称、白名单、采样配置、主题色）
 ├── filter.ts             # 布局过滤逻辑（Menu、Header 区域识别）
 ├── whitelist.ts          # 组件白名单系统（支持宽松匹配）
 ├── vector-optimization.ts # 矢量地狱优化（图标/插画数据压缩）
 ├── fingerprint-sampling.ts # 智能指纹采样（Table/List 重复结构压缩）
 ├── chart-detection.ts    # 图表识别与数据提取（ECharts/G6）
-├── node-processor.ts     # 节点处理器，协调过滤/优化/采样/图表
+├── color-mapping.ts      # 主题色映射（将 Figma 颜色映射到主题 Token）
+├── node-processor.ts     # 节点处理器，协调过滤/优化/采样/图表/颜色映射
 └── meta-builder.ts       # 元信息构建器
 dist/                     # 编译输出 (ES Module)
 docs/                     # 详细文档
@@ -296,8 +297,136 @@ transform.ts
     ├── vector-optimization.ts
     ├── fingerprint-sampling.ts
     ├── chart-detection.ts
-    ├── node-processor.ts ───→ filter.ts, vector-optimization.ts, fingerprint-sampling.ts, chart-detection.ts
+    ├── color-mapping.ts
+    ├── node-processor.ts ───→ filter.ts, vector-optimization.ts, fingerprint-sampling.ts, chart-detection.ts, color-mapping.ts
     └── meta-builder.ts
+```
+
+### 6. 主题色映射 (Color Mapping)
+
+将 Figma 设计稿中的颜色值映射到国利网安主题工具库的主题 Token，供 AI 生成代码时识别组件应使用的属性（如 `type="primary"`）。
+
+#### 6.1 颜色匹配算法
+
+使用 RGB 空间的欧几里得距离计算颜色相似度：
+
+```typescript
+// 距离计算
+colorDistance('#1677ff', '#1890ff')  // 距离约 37
+// 相似度 = 1 - (距离 / 441)，441 是白色到黑色的最大距离
+
+// 置信度
+confidence = 1 - (distance / 441)
+// 距离 0 → 置信度 100%
+// 距离 37 → 置信度 91.6%
+// 低于 0.8 置信度不输出
+```
+
+#### 6.2 主题色配置
+
+**亮色主题** (`themeMode: 'light'`，默认)：
+- 品牌色：colorPrimary (1-10级)
+- 功能色：colorSuccess/Warning/Error/Info (各 1-10 级)
+- 中性色：colorText, colorBorder, colorFill, colorBgContainer 等
+- 预设颜色：blue/purple/cyan/green/magenta/pink/red/orange/yellow/volcano/geekblue/gold/lime (各 1-10 级)
+
+**暗色主题** (`themeMode: 'dark'`)：
+- 颜色值自动切换为暗色模式对应值
+- 例如：`colorText: 'rgba(255,255,255,0.88)'`、`colorBgContainer: '#141414'`
+
+#### 6.3 预设颜色梯度（13种 × 10级）
+
+| 预设颜色 | 基础色 |
+|---------|--------|
+| blue | #1677ff |
+| purple | #722ED1 |
+| cyan | #13C2C2 |
+| green | #52C41A |
+| magenta | #EB2F96 |
+| pink | #EB2F96 |
+| red | #F5222D |
+| orange | #FA8C16 |
+| yellow | #FADB14 |
+| volcano | #FA541C |
+| geekblue | #2F54EB |
+| gold | #FAAD14 |
+| lime | #A0D911 |
+
+每种颜色生成 1-10 级梯度（如 blue1 ~ blue10），**总计约 200 个颜色**。
+
+#### 6.4 输出数据结构
+
+```typescript
+{
+  "_colorMapping": {
+    "fills": [
+      {
+        "originalColor": "#1677ff",
+        "mappedToken": "colorPrimary",
+        "mappedValue": "#1677ff",
+        "confidence": 0.95
+      }
+    ],
+    "strokes": [
+      {
+        "originalColor": "#d9d9d9",
+        "mappedToken": "colorBorder",
+        "mappedValue": "#d9d9d9",
+        "confidence": 0.88
+      }
+    ]
+  }
+}
+```
+
+#### 6.5 使用示例
+
+```typescript
+// 亮色主题（默认）
+await getFigmaNode({
+  nodeId: "1-123",
+  themeMode: 'light'
+});
+
+// 暗黑主题
+await getFigmaNode({
+  nodeId: "1-123",
+  themeMode: 'dark'
+});
+
+// 自定义主题色
+await getFigmaNode({
+  nodeId: "1-123",
+  themeMode: 'light',
+  colorMappingConfig: {
+    confidenceThreshold: 0.8,
+    skipIconColors: true,
+    themeColors: [
+      { token: 'colorPrimary', value: '#1890ff', category: 'primary' },
+      { token: 'colorSuccess', value: '#52c41a', category: 'success' }
+    ]
+  }
+});
+
+// 禁用颜色映射
+await getFigmaNode({
+  nodeId: "1-123",
+  enableColorMapping: false
+});
+```
+
+#### 6.6 配置参数
+
+```typescript
+{
+  enableColorMapping: boolean,     // 是否启用，默认 true
+  themeMode: 'light' | 'dark',      // 主题模式，默认 'light'
+  colorMappingConfig: {
+    confidenceThreshold: number,    // 置信度阈值，默认 0.8
+    skipIconColors: boolean,        // 跳过图标颜色，默认 true
+    themeColors: ThemeColorItem[]   // 自定义主题色配置
+  }
+}
 ```
 
 ## 核心类型
@@ -330,6 +459,11 @@ interface TransformOptions {
   // 图表识别
   enableChartDetection?: boolean;
   chartConfig?: Partial<ChartConfig>;
+
+  // 颜色映射
+  enableColorMapping?: boolean;
+  colorMappingConfig?: Partial<ColorMappingConfig>;
+  themeMode?: 'light' | 'dark';
 }
 
 // 矢量优化配置
@@ -366,6 +500,19 @@ interface ChartConfig {
   dataExtraction: { maxSeries: number; inferNumericValues: boolean; extractFromPosition: boolean };
 }
 
+// 颜色映射配置
+interface ColorMappingConfig {
+  enabled: boolean;
+  confidenceThreshold: number;
+  skipIconColors: boolean;
+  themeColors?: Array<{
+    token: string;
+    value: string;
+    category: 'primary' | 'success' | 'warning' | 'error' | 'info' | 'neutral';
+    level?: number;
+  }>;
+}
+
 // DSL 返回结构
 {
   _meta: { framework, target, filtered, options },
@@ -381,7 +528,12 @@ interface ChartConfig {
   _isChart?: boolean,
   chartMeta?: { detectedType, echartsType, g6Type, confidence },
   chartData?: { axes, series, legend, colorScheme },
-  chartStyle?: { width, height, backgroundColor }
+  chartStyle?: { width, height, backgroundColor },
+  // 颜色映射特有字段
+  _colorMapping?: {
+    fills: Array<{ originalColor, mappedToken, mappedValue, confidence }>,
+    strokes: Array<{ originalColor, mappedToken, mappedValue, confidence }>
+  }
 }
 ```
 
@@ -468,6 +620,38 @@ const result = await getFigmaNode({
 });
 ```
 
+### 调整颜色映射参数
+
+编辑 `src/config.ts` 或通过 MCP 参数：
+
+```typescript
+// 亮色/暗色主题切换
+const result = await getFigmaNode({
+  nodeId: "1-12345",
+  themeMode: 'dark'  // 使用暗色主题颜色配置
+});
+
+// 自定义置信度
+const result = await getFigmaNode({
+  nodeId: "1-12345",
+  colorMappingConfig: {
+    confidenceThreshold: 0.9   // 更严格的匹配要求
+  }
+});
+
+// 自定义主题色
+const result = await getFigmaNode({
+  nodeId: "1-12345",
+  themeMode: 'light',
+  colorMappingConfig: {
+    themeColors: [
+      { token: 'colorPrimary', value: '#1890ff', category: 'primary' },
+      { token: 'colorSuccess', value: '#52c41a', category: 'success' }
+    ]
+  }
+});
+```
+
 ## 工具调用示例
 
 ```typescript
@@ -509,6 +693,21 @@ const chartResult = await getFigmaNode({
     minDataPoints: 3,
     confidenceThreshold: 0.7
   }
+});
+
+// 颜色映射（亮色主题）
+const colorResult = await getFigmaNode({
+  nodeId: "1-12345",
+  framework: "vue",
+  themeMode: 'light',
+  enableColorMapping: true
+});
+
+// 颜色映射（暗色主题）
+const darkColorResult = await getFigmaNode({
+  nodeId: "1-12345",
+  framework: "vue",
+  themeMode: 'dark'
 });
 
 // 完整配置示例
@@ -553,6 +752,14 @@ const fullResult = await getFigmaNode({
   chartConfig: {
     minDataPoints: 3,
     confidenceThreshold: 0.6
+  },
+
+  // 颜色映射（默认启用）
+  enableColorMapping: true,
+  themeMode: 'light',  // 或 'dark'
+  colorMappingConfig: {
+    confidenceThreshold: 0.8,
+    skipIconColors: true
   }
 });
 ```
@@ -564,8 +771,9 @@ const fullResult = await getFigmaNode({
 3. **深度限制**: `maxDepth` 防止深层嵌套导致数据爆炸，默认 10 层
 4. **数据量**:
    - 矢量优化：默认启用
-   - 指纹采样：默认启用（之前是默认禁用）
+   - 指纹采样：默认启用
    - 图表识别：默认启用
+   - 颜色映射：默认启用
 5. **布局类型**: 支持 `flex-row`、`flex-col`、`flex-wrap`、`grid`、`absolute`
 6. **图表识别**:
    - 图表节点标记为 `type: "CHART"`，包含 `chartMeta`、`chartData`、`chartStyle`
@@ -573,11 +781,16 @@ const fullResult = await getFigmaNode({
    - 置信度低于阈值时作为普通容器处理
    - 名称匹配后会进行视觉特征验证
    - 多系列图表按颜色自动分组提取
+7. **颜色映射**:
+   - 将 Figma 颜色映射到主题 Token（如 colorPrimary）
+   - 通过 `themeMode` 参数区分亮色/暗色主题
+   - 支持 13 种预设颜色 × 10 级梯度（约 200 个颜色）
+   - 低于置信度阈值的匹配不输出
 
 ## 版本信息
 
-- **当前版本**: 1.1.0
-- **更新内容**: 漏洞修复与功能增强，包括布局过滤容差、矢量优化配置、指纹采样默认启用、图表识别增强
+- **当前版本**: 1.2.0
+- **更新内容**: 新增主题色映射功能，支持亮色/暗色主题、13种预设颜色梯度
 
 ## 相关文档
 

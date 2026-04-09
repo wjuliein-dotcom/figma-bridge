@@ -257,6 +257,12 @@ export interface TransformOptions {
   enableChartDetection?: boolean;
   /** 图表检测配置 */
   chartConfig?: Partial<ChartConfig>;
+  /** 是否启用颜色映射（将 Figma 颜色映射到主题色） */
+  enableColorMapping?: boolean;
+  /** 颜色映射配置 */
+  colorMappingConfig?: Partial<ColorMappingConfig>;
+  /** 主题模式，用于选择对应的颜色配置（light 或 dark） */
+  themeMode?: 'light' | 'dark';
 }
 
 export interface ProcessContext {
@@ -297,4 +303,41 @@ export interface SamplingRecord {
   fingerprintMap: Map<string, number[]>;
   // 每个保留节点对应的重复数量
   duplicatesCount: Map<number, number>;
+}
+
+// 颜色映射项
+export interface ColorMappingItem {
+  // 原始颜色值
+  originalColor: string;
+  // 映射到的主题色 token
+  mappedToken: string;
+  // 主题色的实际值
+  mappedValue: string;
+  // 匹配置信度 (0-1)
+  confidence: number;
+}
+
+// 颜色映射结果
+export interface ColorMappingResult {
+  // 填充色/背景色映射
+  fills: ColorMappingItem[];
+  // 描边色映射
+  strokes: ColorMappingItem[];
+}
+
+// 颜色映射配置
+export interface ColorMappingConfig {
+  // 启用颜色映射
+  enabled: boolean;
+  // 置信度阈值，低于此值不进行映射
+  confidenceThreshold: number;
+  // 跳过图标内部颜色
+  skipIconColors: boolean;
+  // 主题色配置
+  themeColors?: Array<{
+    token: string;
+    value: string;
+    category: 'primary' | 'success' | 'warning' | 'error' | 'info' | 'neutral';
+    level?: number;
+  }>;
 }

@@ -973,6 +973,264 @@ function createTruncatedResult(node: any, maxDepth: number, currentDepth: number
 
 ---
 
+## 修改四：主题色映射功能（2026-04-09）
+
+### 目标
+为 MCP 添加颜色映射功能，将 Figma 设计稿中的颜色值映射到国利网安主题工具库的主题色，供 AI 生成代码时识别组件应使用的属性（如 `type="primary"`）。
+
+### 背景
+国利网安的主题工具库采用类似 Ant Design Design Token 的主题系统，通过 Seed Token 生成 1-10 级颜色梯度。设计稿中使用 ant-design-vue 组件时，可通过属性（如 `type="primary"`）应用主题色，不需要额外的 CSS 颜色代码。因此只需要输出映射信息供 AI 参考。
+
+### 解决方案
+
+#### 1. 新增颜色映射模块
+
+创建 `src/color-mapping.ts` 文件，实现颜色映射核心逻辑：
+
+**核心函数**：
+- `hexToRgb()` / `rgbToHex()` - 颜色格式转换
+- `colorDistance()` - 使用欧几里得距离计算颜色相似度
+- `findBestMatch()` - 在主题色列表中找到最匹配的颜色
+- `mapNodeColors()` - 映射节点的 fills 和 strokes 颜色
+
+**颜色距离算法**：
+```typescript
+function colorDistance(color1: string, color2: string): number {
+  // RGB 空间中两个颜色的欧几里得距离
+  // 白色到黑色距离约 441
+  return Math.sqrt(
+    Math.pow(rgb1.r - rgb2.r, 2) +
+    Math.pow(rgb1.g - rgb2.g, 2) +
+    Math.pow(rgb1.b - rgb2.b, 2)
+  );
+}
+
+// 置信度 = 1 - (距离 / 441)
+```
+
+#### 2. 主题色配置
+
+**亮色主题色** (`DEFAULT_THEME_COLORS`)：
+
+| 类别 | 颜色示例 |
+|------|---------|
+| 品牌色 Primary (1-10级) | colorPrimary, colorPrimaryBg, colorPrimaryHover... |
+| 功能色 Success (1-10级) | colorSuccess, colorSuccessBg, colorSuccessHover... |
+| 功能色 Warning (1-10级) | colorWarning, colorWarningBg... |
+| 功能色 Error (1-10级) | colorError, colorErrorBg... |
+| 功能色 Info (1-10级) | colorInfo, colorInfoBg... |
+| 中性色 | colorText, colorTextSecondary, colorBorder, colorBgContainer... |
+
+**暗色主题色** (`DARK_THEME_COLORS`)：
+```typescript
+// 暗色模式下颜色值不同
+{ token: 'colorText', value: 'rgba(255,255,255,0.88)' }
+{ token: 'colorBgContainer', value: '#141414' }
+{ token: 'colorBorder', value: '#424242' }
+```
+
+#### 3. 预设颜色梯度生成
+
+为支持 13 种 Ant Design 预设颜色，每种生成 1-10 级梯度：
+
+```typescript
+function generateColorPalette(baseColor: string, tokenPrefix: string): ThemeColorItem[] {
+  // 根据基础颜色亮度生成 10 级梯度
+  // 亮色基准：越高级别越深
+  // 暗色基准：越高级别越浅
+}
+
+// 13 种预设颜色
+const presetColors = [
+  { name: 'blue', color: '#1677ff' },
+  { name: 'purple', color: '#722ED1' },
+  { name: 'cyan', color: '#13C2C2' },
+  { name: 'green', color: '#52C41A' },
+  { name: 'magenta', color: '#EB2F96' },
+  { name: 'pink', color: '#EB2F96' },
+  { name: 'red', color: '#F5222D' },
+  { name: 'orange', color: '#FA8C16' },
+  { name: 'yellow', color: '#FADB14' },
+  { name: 'volcano', color: '#FA541C' },
+  { name: 'geekblue', color: '#2F54EB' },
+  { name: 'gold', color: '#FAAD14' },
+  { name: 'lime', color: '#A0D911' },
+];
+
+// 生成后示例：blue1 ~ blue10, purple1 ~ purple10 等
+```
+
+**生成函数**：
+```typescript
+export function generateFullLightThemeColors(): ThemeColorItem[] {
+  return [...DEFAULT_THEME_COLORS, ...generatePresetColorsLight()];
+}
+
+export function generateFullDarkThemeColors(): ThemeColorItem[] {
+  return [...DARK_THEME_COLORS, ...generatePresetColorsDark()];
+}
+```
+
+#### 4. themeMode 参数支持
+
+添加 `themeMode` 参数自动切换明暗主题配置：
+
+```typescript
+// transform.ts
+function getColorMappingConfig(userConfig: any, themeMode?: ThemeMode): any {
+  let defaultThemeColors = generateFullLightThemeColors();
+  if (themeMode === 'dark') {
+    defaultThemeColors = generateFullDarkThemeColors();
+  }
+  return {
+    enabled: true,
+    confidenceThreshold: 0.8,
+    themeColors: defaultThemeColors,
+    ...userConfig,
+  };
+}
+```
+
+#### 5. 节点处理器集成
+
+在 `src/node-processor.ts` 的 `createBaseResult()` 中调用颜色映射：
+
+```typescript
+function createBaseResult(node: any, context: ProcessContext, deps: ProcessorDependencies): any {
+  // ... 原有逻辑
+
+  // 颜色映射
+  if (deps.enableColorMapping && deps.colorMappingConfig.enabled) {
+    const skipMapping = shouldSkipColorMapping(node, { isInsideIcon: context.isInsideIcon });
+    if (!skipMapping) {
+      const colorMapping = mapNodeColors(node, {
+        themeColors: deps.colorMappingConfig.themeColors,
+        confidenceThreshold: deps.colorMappingConfig.confidenceThreshold
+      });
+      if (colorMapping) {
+        result._colorMapping = colorMapping;
+      }
+    }
+  }
+
+  return result;
+}
+```
+
+#### 6. MCP 工具参数更新
+
+```typescript
+{
+  enableColorMapping: z.boolean().optional().default(true)
+    .describe("是否启用颜色映射（默认启用），将Figma颜色映射到主题色"),
+  colorMappingConfig: z.object({
+    confidenceThreshold: z.number().optional()
+      .describe("颜色映射置信度阈值（0-1，默认0.8），低于此值不进行映射"),
+    skipIconColors: z.boolean().optional()
+      .describe("是否跳过图标颜色（默认true）"),
+    themeColors: z.array(z.object({
+      token: z.string(),
+      value: z.string(),
+      category: z.enum(['primary', 'success', 'warning', 'error', 'info', 'neutral']),
+      level: z.number().optional()
+    })).optional().describe("自定义主题色配置，会覆盖默认配置")
+  }).optional().describe("颜色映射配置选项"),
+  themeMode: z.enum(['light', 'dark']).optional().default('light')
+    .describe("主题模式，light 使用亮色主题色，dark 使用暗色主题色（默认 light）")
+}
+```
+
+### 输出示例
+
+```json
+{
+  "id": "1:123",
+  "name": "Card Container",
+  "type": "FRAME",
+  "_colorMapping": {
+    "fills": [
+      {
+        "originalColor": "#1677ff",
+        "mappedToken": "colorPrimary",
+        "mappedValue": "#1677ff",
+        "confidence": 0.95
+      }
+    ],
+    "strokes": [
+      {
+        "originalColor": "#d9d9d9",
+        "mappedToken": "colorBorder",
+        "mappedValue": "#d9d9d9",
+        "confidence": 0.88
+      }
+    ]
+  }
+}
+```
+
+### 使用示例
+
+```typescript
+// 亮色主题（默认）
+await getFigmaNode({
+  nodeId: "1-123",
+  themeMode: 'light'
+});
+
+// 暗黑主题
+await getFigmaNode({
+  nodeId: "1-123",
+  themeMode: 'dark'
+});
+
+// 自定义主题色（覆盖默认）
+await getFigmaNode({
+  nodeId: "1-123",
+  themeMode: 'dark',
+  colorMappingConfig: {
+    themeColors: [
+      { token: 'colorPrimary', value: '#1890ff', category: 'primary' },
+      // ...
+    ]
+  }
+});
+
+// 禁用颜色映射
+await getFigmaNode({
+  nodeId: "1-123",
+  enableColorMapping: false
+});
+```
+
+### 影响文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| `src/color-mapping.ts` | 新增颜色映射核心逻辑 |
+| `src/config.ts` | 添加 DEFAULT_THEME_COLORS、DARK_THEME_COLORS、ThemeMode 类型、生成函数 |
+| `src/types.ts` | 添加 ColorMappingResult、ColorMappingItem、ColorMappingConfig 类型 |
+| `src/node-processor.ts` | 集成颜色映射到节点处理 |
+| `src/transform.ts` | 支持 enableColorMapping、colorMappingConfig、themeMode 选项 |
+| `src/index.ts` | MCP 工具参数添加颜色映射和主题模式配置 |
+
+### 颜色总数
+
+| 类别 | 数量 |
+|------|------|
+| 功能色 (primary/success/warning/error/info) | 50 个 |
+| 中性色 (text/border/fill/bg) | 约 20 个 |
+| 预设颜色梯度 (13种 × 10级) | 130 个 |
+| **总计** | **约 200 个颜色** |
+
+### 注意事项
+
+1. **映射逻辑**：将 Figma 颜色与主题色列表逐一比对，找到距离最近的值
+2. **置信度阈值**：低于 0.8 的匹配不输出，避免误差
+3. **图标颜色跳过**：默认跳过图标内部的颜色映射
+4. **themeMode 作用**：确保同一 token 名称在不同主题下正确匹配对应颜色
+
+---
+
 ## 修改汇总表
 
 | 时间 | 类型 | 主要内容 | 影响文件 |
@@ -980,7 +1238,8 @@ function createTruncatedResult(node: any, maxDepth: number, currentDepth: number
 | 2026-04-01 | 功能新增 | 图表识别与数据提取功能，支持13种图表类型 | `src/chart-detection.ts`(新增), `src/types.ts`, `src/config.ts`, `src/node-processor.ts`, `src/transform.ts`, `src/meta-builder.ts`, `src/index.ts`, `CLAUDE.md` |
 | 2026-04-02 | 功能优化 | 图表识别模块优化：决策树重构、名称验证、数据提取增强 | `src/chart-detection.ts`, `src/types.ts` |
 | 2026-04-02 | 漏洞修复 | 布局过滤、矢量优化、指纹采样、图表识别、节点处理全面优化 | `src/filter.ts`, `src/whitelist.ts`, `src/vector-optimization.ts`, `src/fingerprint-sampling.ts`, `src/node-processor.ts`, `src/chart-detection.ts`, `src/types.ts`, `src/config.ts`, `src/transform.ts`, `src/index.ts` |
+| 2026-04-09 | 功能新增 | 主题色映射功能：支持亮色/暗色主题、13种预设颜色梯度 | `src/color-mapping.ts`(新增), `src/config.ts`, `src/types.ts`, `src/node-processor.ts`, `src/transform.ts`, `src/index.ts` |
 
 ---
 
-*记录生成时间: 2026-04-02*
+*记录生成时间: 2026-04-09*
